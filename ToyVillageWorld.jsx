@@ -22,10 +22,10 @@ const BUILDING_APPS = {
     description: 'Cottage',
   },
   well: {
-    name: 'Explorador',
-    icon: '📁',
-    color: '#1ABC9C',
-    description: 'Pozo Mágico',
+    name: 'Pozo de los Deseos',
+    icon: '✨',
+    color: '#9B59B6',
+    description: 'Propón nuevas apps',
   },
   market: {
     name: '¿Vas a llevar comida a la ofi?',
@@ -140,6 +140,10 @@ export default function ToyVillageWorld() {
     templeZ: 15,
     originalPositions: [], // Store original NPC/animal positions
   });
+  
+  // Swimming message (deep sea)
+  const [swimmingMessage, setSwimmingMessage] = useState(null);
+  const swimmingMessageShown = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -165,19 +169,20 @@ export default function ToyVillageWorld() {
     let targetZoom = 1;
 
     // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.NoToneMapping; // Colores más brillantes y fieles
+    renderer.toneMapping = THREE.LinearToneMapping;
+    renderer.toneMappingExposure = 0.7; // Even softer exposure
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     containerRef.current.appendChild(renderer.domElement);
 
     // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Very high ambient = minimal contrast
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xfffaf0, 1.2);
+    const sunLight = new THREE.DirectionalLight(0xfffaf0, 0.5); // Very soft sun
     sunLight.position.set(150, 200, 100);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.width = 4096;
@@ -190,15 +195,18 @@ export default function ToyVillageWorld() {
     sunLight.shadow.camera.bottom = -250;
     scene.add(sunLight);
 
-    const rimLight = new THREE.DirectionalLight(0xffeedd, 0.4);
+    const rimLight = new THREE.DirectionalLight(0xffeedd, 0.15); // Very soft rim
     rimLight.position.set(-100, 80, -100);
     scene.add(rimLight);
 
-    const hemiLight = new THREE.HemisphereLight(0x87CEEB, 0x7CB342, 0.5);
+    const hemiLight = new THREE.HemisphereLight(0xB0D4E8, 0xA8D5A2, 0.4); // Pastel sky/ground colors
     scene.add(hemiLight);
+    
+    // Soft fog for dreamy pastel atmosphere
+    scene.fog = new THREE.Fog(0xE8F4F8, 100, 350);
 
-    // Materials helper
-    function createGlossyMaterial(color, metalness = 0.1, roughness = 0.15) {
+    // Materials helper - high roughness, low metalness for soft matte pastel look
+    function createGlossyMaterial(color, metalness = 0.02, roughness = 0.6) {
       return new THREE.MeshStandardMaterial({
         color: color,
         roughness: roughness,
@@ -208,6 +216,49 @@ export default function ToyVillageWorld() {
 
     // ============ TERRAIN SYSTEM - VALLEY LAYOUT ============
     // Based on design document: River (South) → Market → Plaza → Forest/Meadows (North)
+    // Extended south: Beach → Sea at the far south
+    
+    // EXCLUSION ZONES - areas where trees/rocks should NOT spawn
+    const EXCLUSION_ZONES = [
+      { x: -90, z: 55, r: 20 },    // Tribal House
+      { x: -60, z: 55, r: 15 },    // Orchard area
+      { x: 60, z: 45, r: 18 },     // Mediterranean House
+      { x: -50, z: 10, r: 18 },    // Cottage House
+      { x: -170, z: -170, r: 30 }, // Ice Cave House
+      { x: -32, z: 12, r: 10 },    // Well next to cottage
+      { x: 10, z: -55, r: 12 },    // Well alto
+      { x: 25, z: 32, r: 20 },     // Market area
+      { x: 155, z: 23, r: 35 },    // Bar Las Nieves
+      { x: 45, z: -45, r: 15 },    // Jacuzzi
+      { x: -10, z: 85, r: 15 },    // Bridge
+      { x: -85, z: 75, r: 10 },    // Canoe
+      { x: 0, z: 180, r: 100 },    // Beach area (no trees on beach - extended)
+    ];
+    
+    function isInExclusionZone(x, z) {
+      for (const zone of EXCLUSION_ZONES) {
+        const dist = Math.sqrt((x - zone.x) ** 2 + (z - zone.z) ** 2);
+        if (dist < zone.r) return true;
+      }
+      return false;
+    }
+    
+    // Beach and sea zones - extended grass area before beach
+    const BEACH_START_Z = 140;  // Beach starts further south (more grass)
+    const SEA_START_Z = 200;    // Sea begins here
+    const SEA_DEEP_Z = 220;     // Deep sea - can't swim further
+    
+    function isOnBeach(x, z) {
+      return z > BEACH_START_Z && z < SEA_START_Z;
+    }
+    
+    function isInSea(x, z) {
+      return z >= SEA_START_Z;
+    }
+    
+    function isInDeepSea(x, z) {
+      return z >= SEA_DEEP_Z;
+    }
     
     // Height calculation - smooth valley with river at south
     function getTerrainHeight(x, z) {
@@ -281,17 +332,32 @@ export default function ToyVillageWorld() {
         height = Math.max(0, height - smoothRiver * 8);
       }
       
-      // Gentle undulations for organic feel
-      height += Math.sin(x * 0.03) * Math.cos(z * 0.03) * 1.5;
-      height += Math.sin(x * 0.07 + 1) * Math.cos(z * 0.05) * 0.8;
+      // Beach area - flat and slightly above sea level
+      if (z > BEACH_START_Z) {
+        // Transition to beach
+        const beachProgress = Math.min(1, (z - BEACH_START_Z) / 20);
+        height = height * (1 - beachProgress) + 1 * beachProgress; // Flatten to 1
+        
+        // Sea - below beach level
+        if (z >= SEA_START_Z) {
+          const seaProgress = Math.min(1, (z - SEA_START_Z) / 30);
+          height = 1 - seaProgress * 3; // Goes down to -2
+        }
+      }
       
-      return Math.max(0, height);
+      // Gentle undulations for organic feel (not in sea)
+      if (z < SEA_START_Z) {
+        height += Math.sin(x * 0.03) * Math.cos(z * 0.03) * 1.5;
+        height += Math.sin(x * 0.07 + 1) * Math.cos(z * 0.05) * 0.8;
+      }
+      
+      return Math.max(-3, height); // Allow negative for sea floor
     }
 
     // Create visual terrain mesh
     function createTerrainMesh() {
-      const size = 400;
-      const segments = 100;
+      const size = 560; // Extended map (400 + 80*2)
+      const segments = 120;
       const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
       
       const positions = geometry.attributes.position.array;
@@ -303,6 +369,12 @@ export default function ToyVillageWorld() {
       const grassR = 0x7C / 255, grassG = 0xB3 / 255, grassB = 0x42 / 255;
       // Snow color (RGB normalized) 
       const snowR = 0xFA / 255, snowG = 0xFA / 255, snowB = 0xFA / 255;
+      // Sand color (warm beige)
+      const sandR = 0xF5 / 255, sandG = 0xE6 / 255, sandB = 0xC8 / 255;
+      // Sea color (turquoise)
+      const seaR = 0x48 / 255, seaG = 0xD1 / 255, seaB = 0xCC / 255;
+      // Deep sea
+      const deepSeaR = 0x20 / 255, deepSeaG = 0xB2 / 255, deepSeaB = 0xAA / 255;
       
       for (let i = 0; i < positions.length; i += 3) {
         const x = positions[i];
@@ -311,9 +383,21 @@ export default function ToyVillageWorld() {
         
         positions[i + 2] = getTerrainHeight(x, worldZ);
         
-        // Determine color based on frozen zone (worldZ < -30)
+        // Determine color based on zone
         let r, g, b;
-        if (worldZ < -30) {
+        
+        if (worldZ >= SEA_START_Z) {
+          // Sea zone
+          const seaDepth = Math.min(1, (worldZ - SEA_START_Z) / 30);
+          r = seaR + (deepSeaR - seaR) * seaDepth;
+          g = seaG + (deepSeaG - seaG) * seaDepth;
+          b = seaB + (deepSeaB - seaB) * seaDepth;
+        } else if (worldZ >= BEACH_START_Z) {
+          // Beach zone - sand
+          r = sandR;
+          g = sandG;
+          b = sandB;
+        } else if (worldZ < -30) {
           // Frozen zone - snow color with slight gradient
           const frozenDepth = Math.min(1, (-30 - worldZ) / 60); // 0 at z=-30, 1 at z=-90
           // Blend to pure snow
@@ -471,8 +555,8 @@ export default function ToyVillageWorld() {
       // River flows West to East at southern edge
       // Use a flat plane instead of tube to avoid terrain clipping
       const riverWidth = 24;
-      const riverLength = 360;
-      const segments = 60;
+      const riverLength = 520; // Extended for larger map
+      const segments = 80;
       
       const riverGeom = new THREE.PlaneGeometry(riverLength, riverWidth, segments, 1);
       const positions = riverGeom.attributes.position.array;
@@ -542,6 +626,216 @@ export default function ToyVillageWorld() {
       scene.add(group);
     }
     createRiver();
+
+    // ============ SEA ============
+    function createSea() {
+      // Sea water plane - extended to match new map size
+      const seaGeom = new THREE.PlaneGeometry(560, 100, 50, 12);
+      const seaMat = new THREE.MeshStandardMaterial({
+        color: 0x48D1CC,
+        roughness: 0.1,
+        metalness: 0.2,
+        transparent: true,
+        opacity: 0.85,
+      });
+      const sea = new THREE.Mesh(seaGeom, seaMat);
+      sea.rotation.x = -Math.PI / 2;
+      sea.position.set(0, 0, SEA_START_Z + 50);
+      scene.add(sea);
+      
+      // Gentle waves decoration
+      for (let i = 0; i < 25; i++) {
+        const waveX = (Math.random() - 0.5) * 500;
+        const waveZ = SEA_START_Z + 5 + Math.random() * 50;
+        const waveMat = new THREE.MeshStandardMaterial({
+          color: 0xFFFFFF,
+          roughness: 0.8,
+          transparent: true,
+          opacity: 0.4,
+        });
+        const wave = new THREE.Mesh(
+          new THREE.CircleGeometry(3 + Math.random() * 4, 8),
+          waveMat
+        );
+        wave.rotation.x = -Math.PI / 2;
+        wave.position.set(waveX, 0.3, waveZ);
+        scene.add(wave);
+      }
+    }
+    createSea();
+
+    // ============ BEACH DECORATIONS ============
+    function createBeachUmbrella(x, z, color) {
+      const group = new THREE.Group();
+      const y = getTerrainHeight(x, z);
+      
+      // Pole
+      const poleMat = createGlossyMaterial(0x8B4513);
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.2, 0.2, 8, 8),
+        poleMat
+      );
+      pole.position.y = 4;
+      group.add(pole);
+      
+      // Umbrella top
+      const umbrellaMat = createGlossyMaterial(color);
+      const umbrella = new THREE.Mesh(
+        new THREE.ConeGeometry(5, 2, 8),
+        umbrellaMat
+      );
+      umbrella.position.y = 8.5;
+      umbrella.rotation.x = Math.PI;
+      group.add(umbrella);
+      
+      group.position.set(x, y, z);
+      scene.add(group);
+      return group;
+    }
+    
+    function createBeachTowel(x, z, color) {
+      const y = getTerrainHeight(x, z);
+      const towelMat = createGlossyMaterial(color);
+      const towel = new THREE.Mesh(
+        new THREE.BoxGeometry(4, 0.1, 6),
+        towelMat
+      );
+      towel.position.set(x, y + 0.1, z);
+      towel.rotation.y = Math.random() * 0.5;
+      scene.add(towel);
+    }
+    
+    function createBeachBall(x, z) {
+      const y = getTerrainHeight(x, z);
+      const group = new THREE.Group();
+      
+      // Ball with stripes
+      const ballSize = 1.2;
+      const ballMat1 = createGlossyMaterial(0xFF4444);
+      const ballMat2 = createGlossyMaterial(0xFFFF44);
+      const ballMat3 = createGlossyMaterial(0x4444FF);
+      
+      const ball = new THREE.Mesh(
+        new THREE.SphereGeometry(ballSize, 16, 16),
+        ballMat1
+      );
+      ball.position.y = ballSize;
+      group.add(ball);
+      
+      // Stripe rings
+      const stripe1 = new THREE.Mesh(
+        new THREE.TorusGeometry(ballSize * 0.9, 0.15, 8, 16),
+        ballMat2
+      );
+      stripe1.position.y = ballSize;
+      stripe1.rotation.x = Math.PI / 2;
+      group.add(stripe1);
+      
+      const stripe2 = new THREE.Mesh(
+        new THREE.TorusGeometry(ballSize * 0.9, 0.15, 8, 16),
+        ballMat3
+      );
+      stripe2.position.y = ballSize;
+      group.add(stripe2);
+      
+      group.position.set(x, y, z);
+      scene.add(group);
+      return group;
+    }
+    
+    function createBeachKid(x, z, shirtColor) {
+      const group = new THREE.Group();
+      const y = getTerrainHeight(x, z);
+      
+      // Simple kid figure (smaller than NPCs)
+      const skinMat = createGlossyMaterial(0xFFDBB4);
+      const shirtMat = createGlossyMaterial(shirtColor);
+      const shortsMat = createGlossyMaterial(0x4169E1);
+      const hairMat = createGlossyMaterial(0x3D2314);
+      
+      // Body
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.8, 0.6, 2, 8),
+        shirtMat
+      );
+      body.position.y = 2.5;
+      group.add(body);
+      
+      // Head
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.7, 12, 12),
+        skinMat
+      );
+      head.position.y = 4;
+      group.add(head);
+      
+      // Hair
+      const hair = new THREE.Mesh(
+        new THREE.SphereGeometry(0.75, 12, 12),
+        hairMat
+      );
+      hair.position.y = 4.2;
+      hair.scale.y = 0.6;
+      group.add(hair);
+      
+      // Legs (shorts)
+      const legL = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.2, 1.2, 6),
+        shortsMat
+      );
+      legL.position.set(-0.3, 0.9, 0);
+      group.add(legL);
+      
+      const legR = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.2, 1.2, 6),
+        shortsMat
+      );
+      legR.position.set(0.3, 0.9, 0);
+      group.add(legR);
+      
+      // Arms
+      const armL = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.15, 0.15, 1, 6),
+        skinMat
+      );
+      armL.position.set(-1, 3, 0);
+      armL.rotation.z = 0.5;
+      group.add(armL);
+      
+      const armR = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.15, 0.15, 1, 6),
+        skinMat
+      );
+      armR.position.set(1, 3, 0);
+      armR.rotation.z = -0.5;
+      group.add(armR);
+      
+      group.position.set(x, y, z);
+      scene.add(group);
+      return group;
+    }
+    
+    // Place beach items - positioned in new beach zone (140-200)
+    createBeachUmbrella(-40, 160, 0xFF6B6B);
+    createBeachUmbrella(20, 168, 0x4ECDC4);
+    createBeachUmbrella(70, 155, 0xFFE66D);
+    createBeachUmbrella(-80, 172, 0x95E1D3);
+    createBeachUmbrella(120, 165, 0xFF9F43);
+    createBeachUmbrella(-120, 158, 0x70A1FF);
+    
+    createBeachTowel(-35, 162, 0xF38181);
+    createBeachTowel(25, 170, 0x3D5A80);
+    createBeachTowel(65, 157, 0xFFD93D);
+    createBeachTowel(-75, 175, 0x6BCB77);
+    createBeachTowel(115, 167, 0xA29BFE);
+    
+    // Beach ball between kids
+    createBeachBall(0, 180);
+    
+    // Kids playing
+    createBeachKid(-10, 185, 0xFF6B6B);
+    createBeachKid(12, 178, 0x4ECDC4);
+    createBeachKid(-5, 172, 0xFFE66D);
 
     // ============ BRIDGES ============
     function createWoodenBridge(x, z, rotation = 0, length = 30) {
@@ -2191,10 +2485,8 @@ export default function ToyVillageWorld() {
       const tx = -15 + Math.cos(angle) * dist;
       const tz = -50 + Math.sin(angle) * dist * 0.6;
       
-      // Avoid placing trees too close to ice cave
-      const nearIceCave = Math.abs(tx + 170) < 25 && Math.abs(tz + 170) < 25;
-      
-      if (!nearIceCave && tz < -20) {
+      // Use exclusion zone check
+      if (!isInExclusionZone(tx, tz) && tz < -20) {
         // Trees in frozen zone (z < -30) are snowy pines
         const treeType = tz < -30 ? 'snowy_pine' : (Math.random() > 0.35 ? 'pine' : 'normal');
         createTree(
@@ -2212,10 +2504,8 @@ export default function ToyVillageWorld() {
       const tx = (Math.random() - 0.5) * 160;
       const tz = -80 + Math.random() * 40; // z from -80 to -40
       
-      // Avoid ice cave
-      const nearIceCave = Math.abs(tx + 170) < 25 && Math.abs(tz + 170) < 25;
-      
-      if (!nearIceCave) {
+      // Use exclusion zone check
+      if (!isInExclusionZone(tx, tz)) {
         createTree(
           tx,
           getTerrainHeight(tx, tz),
@@ -2314,6 +2604,9 @@ export default function ToyVillageWorld() {
     for (let i = 0; i < 40; i++) {
       const rx = (Math.random() - 0.5) * 280;
       const rz = (Math.random() - 0.5) * 150 - 20; // z from -95 to 55 (north of river)
+      
+      // Skip if in exclusion zone
+      if (isInExclusionZone(rx, rz)) continue;
       
       // More rocks in higher elevations
       const height = getTerrainHeight(rx, rz);
@@ -3054,7 +3347,7 @@ export default function ToyVillageWorld() {
       scene.add(sheep);
       animals.push({ 
         mesh: sheep, 
-        ai: createAnimalAI(x, z, { wanderRadius: 20, walkSpeed: 0.002, minZ: 100, maxZ: 170, type: 'sheep' }) 
+        ai: createAnimalAI(x, z, { wanderRadius: 20, walkSpeed: 0.002, minZ: 100, maxZ: 135, type: 'sheep' }) // maxZ < BEACH_START to keep off beach 
       });
     }
     
@@ -3065,7 +3358,7 @@ export default function ToyVillageWorld() {
     scene.add(collie);
     animals.push({ 
       mesh: collie, 
-      ai: createAnimalAI(collieX, collieZ, { wanderRadius: 30, walkSpeed: 0.005, minZ: 100, maxZ: 170, type: 'dog' }) 
+      ai: createAnimalAI(collieX, collieZ, { wanderRadius: 30, walkSpeed: 0.005, minZ: 100, maxZ: 135, type: 'dog' }) // maxZ < BEACH_START 
     });
     
     // Yeti in the ice zone (north, z < -30)
@@ -3190,10 +3483,14 @@ export default function ToyVillageWorld() {
               // Also check bar exclusion zone (animals NEVER enter bar area)
               const BAR_X = 155, BAR_Z = 23, BAR_RADIUS = 18;
               const distToBar = Math.sqrt((newX - BAR_X) ** 2 + (newZ - BAR_Z) ** 2);
-              if (distToBar > BAR_RADIUS) {
-                break; // Valid position - outside bar zone
+              
+              // Beach exclusion (animals stay off beach)
+              const BEACH_LIMIT_Z = 138;
+              
+              if (distToBar > BAR_RADIUS && newZ < BEACH_LIMIT_Z) {
+                break; // Valid position - outside bar zone and not on beach
               }
-              // If in bar zone, keep trying for a new position
+              // If invalid, keep trying for a new position
             }
           }
           
@@ -3240,6 +3537,14 @@ export default function ToyVillageWorld() {
               nextX = BAR_X + Math.cos(awayAngle) * BAR_RADIUS;
               nextZ = BAR_Z + Math.sin(awayAngle) * BAR_RADIUS;
               // Stop and pick new target
+              ai.state = 0;
+              ai.stateTimer = 500;
+            }
+            
+            // Beach exclusion zone (animals stay off the beach)
+            const BEACH_LIMIT_Z = 138; // Just before beach starts
+            if (nextZ > BEACH_LIMIT_Z) {
+              nextZ = BEACH_LIMIT_Z;
               ai.state = 0;
               ai.stateTimer = 500;
             }
@@ -3388,9 +3693,9 @@ export default function ToyVillageWorld() {
     }
 
     function canMoveTo(x, z) {
-      // World boundary - rectangular, matching terrain size (400x400)
-      // Terrain goes from -200 to 200, allow walking to -190 to 190
-      if (x < -190 || x > 190 || z < -190 || z > 190) return false;
+      // World boundary - rectangular, matching terrain size (560x560)
+      // Terrain goes from -280 to 280, allow walking to -270 to 270
+      if (x < -270 || x > 270 || z < -270 || z > 270) return false;
 
       // River is now passable! But you'll drift...
       // No river collision - player can enter the water
@@ -3679,6 +3984,12 @@ export default function ToyVillageWorld() {
     gameRef.current = { toggleCongregation };
 
     function onKeyDown(e) {
+      // Ignore keyboard events when typing in input/textarea
+      const tagName = e.target.tagName.toLowerCase();
+      if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+        return; // Let the input handle the event normally
+      }
+      
       if (keys.hasOwnProperty(e.key)) { keys[e.key] = true; e.preventDefault(); }
       
       // Enter key to open app when near building
@@ -3699,6 +4010,11 @@ export default function ToyVillageWorld() {
       }
     }
     function onKeyUp(e) {
+      // Ignore keyboard events when typing in input/textarea
+      const tagName = e.target.tagName.toLowerCase();
+      if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+        return;
+      }
       if (keys.hasOwnProperty(e.key)) { keys[e.key] = false; }
     }
 
@@ -3879,7 +4195,20 @@ export default function ToyVillageWorld() {
       const playerInJacuzzi = isInJacuzzi(playerState.x, playerState.z);
       const playerOnIce = isInFrozenZone(playerState.x, playerState.z);
       const playerOnIcePlate = isOnIcePlate(playerState.x, playerState.z);
+      const playerOnBeach = isOnBeach(playerState.x, playerState.z);
+      const playerInSea = isInSea(playerState.x, playerState.z);
+      const playerInDeepSea = isInDeepSea(playerState.x, playerState.z);
       const iceFactor = getIceFactor(playerState.z);
+      
+      // Check for deep sea - show message
+      if (playerInDeepSea && !swimmingMessageShown.current) {
+        setSwimmingMessage('¡Para ahí! ¿De verdad pretendes nadar con esos minibrazos?');
+        swimmingMessageShown.current = true;
+        setTimeout(() => {
+          setSwimmingMessage(null);
+          swimmingMessageShown.current = false;
+        }, 3000);
+      }
       
       // Calculate friction based on terrain
       let friction = NORMAL_FRICTION;
@@ -3893,6 +4222,14 @@ export default function ToyVillageWorld() {
         // Ice: high speed, low friction (lots of sliding)
         friction = ICE_FRICTION - (1 - iceFactor) * (ICE_FRICTION - NORMAL_FRICTION);
         speedMultiplier = 1 + (ICE_SPEED_MULTIPLIER - 1) * iceFactor;
+      } else if (playerOnBeach) {
+        // Beach: sand slows you down (opposite of ice)
+        speedMultiplier = 0.8; // 20% slower on sand
+        friction = NORMAL_FRICTION * 0.9; // Slightly more drag
+      } else if (playerInSea) {
+        // Sea: very slow, wading
+        speedMultiplier = 0.35;
+        friction = NORMAL_FRICTION;
       } else if (playerInRiver || playerInJacuzzi) {
         // Water: slower, no sliding
         speedMultiplier = playerInJacuzzi ? 0.4 : 0.6; // Even slower in jacuzzi (relaxing!)
@@ -5247,36 +5584,338 @@ export default function ToyVillageWorld() {
     </div>
   );
 
-  const ExploradorApp = () => (
-    <div style={{ padding: 24, background: '#1a1a1a', fontFamily: "'Inter Tight', sans-serif" }}>
-      <h3 style={{ margin: '0 0 18px 0', color: '#1ABC9C', fontSize: 18, fontWeight: 800, textShadow: '0 2px 8px rgba(26,188,156,0.3)' }}>📁 Explorador de Archivos</h3>
-      
-      {/* PATH BAR */}
-      <div className="plastic-input" style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, padding: 12 }}>
-        <span style={{ fontSize: 16 }}>📂</span> 
-        <span style={{ color: 'rgba(255,255,255,0.7)' }}>/home/garaje/</span>
+  // Pozo de los Deseos - Form state
+  const [wishForm, setWishForm] = useState({
+    titulo: '',
+    objetivo: '',
+    mecanica: '',
+    area: '',
+    nombre: '',
+  });
+  const [wishSubmitted, setWishSubmitted] = useState(false);
+
+  const handleWishSubmit = () => {
+    // Validate
+    if (!wishForm.titulo || !wishForm.objetivo || !wishForm.nombre) {
+      alert('Por favor completa al menos: Título, Objetivo y Tu nombre');
+      return;
+    }
+    
+    // Build email body
+    const subject = encodeURIComponent(`🌟 Nueva idea para Aldea Garaje: ${wishForm.titulo}`);
+    const body = encodeURIComponent(
+`¡Nueva idea para la Aldea Garaje! ✨
+
+📌 TÍTULO:
+${wishForm.titulo}
+
+🎯 OBJETIVO:
+${wishForm.objetivo}
+
+⚙️ MECÁNICA / FUNCIONALIDAD:
+${wishForm.mecanica || '(No especificado)'}
+
+🗺️ ÁREA PREFERIDA DEL MAPA:
+${wishForm.area || '(Sin preferencia)'}
+
+👤 ENVIADO POR:
+${wishForm.nombre}
+
+---
+Enviado desde el Pozo de los Deseos 🪙✨`
+    );
+    
+    // Open mailto
+    window.open(`mailto:antonio.seijas@garajedeideas.com?subject=${subject}&body=${body}`, '_blank');
+    
+    // Show success
+    setWishSubmitted(true);
+    
+    // Reset after delay
+    setTimeout(() => {
+      setWishForm({ titulo: '', objetivo: '', mecanica: '', area: '', nombre: '' });
+      setWishSubmitted(false);
+    }, 5000);
+  };
+
+  const wellContent = wishSubmitted ? (
+    <div style={{ 
+      padding: 40, 
+      background: 'linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)', 
+      fontFamily: "'Inter Tight', sans-serif",
+      textAlign: 'center',
+      minHeight: 400,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+    }}>
+      <div style={{ fontSize: 64, marginBottom: 20 }}>🌟</div>
+      <h2 style={{ color: '#FFD700', fontSize: 24, marginBottom: 12 }}>¡Deseo enviado!</h2>
+      <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, maxWidth: 300 }}>
+        Tu idea ha sido lanzada al pozo. Se abrirá tu cliente de correo para completar el envío.
+      </p>
+      <div style={{ 
+        marginTop: 20, 
+        padding: '12px 24px', 
+        background: 'rgba(155, 89, 182, 0.3)', 
+        borderRadius: 12,
+        color: '#BB8FCE',
+        fontSize: 12,
+      }}>
+        ✨ Gracias por contribuir a la Aldea
       </div>
-      
-      {/* FILE LIST */}
-      {[
-        { icon: '📁', name: 'Documentos', type: 'folder' },
-        { icon: '📁', name: 'Proyectos', type: 'folder' },
-        { icon: '📁', name: 'Imágenes', type: 'folder' },
-        { icon: '📄', name: 'readme.txt', type: 'file' },
-        { icon: '🎨', name: 'diseño.fig', type: 'file' },
-        { icon: '📊', name: 'datos.xlsx', type: 'file' },
-      ].map((item, i) => (
-        <div key={i} className="plastic-lesson" style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: 12, 
-          marginBottom: 8,
+    </div>
+  ) : (
+    <div style={{ 
+      padding: 24, 
+      background: 'linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)', 
+      fontFamily: "'Inter Tight', sans-serif",
+      maxHeight: '70vh',
+      overflowY: 'auto',
+    }}>
+      {/* Header */}
+      <div style={{ textAlign: 'center', marginBottom: 24 }}>
+        <div style={{ fontSize: 48, marginBottom: 8 }}>🪙✨</div>
+        <h3 style={{ 
+          margin: '0 0 8px 0', 
+          color: '#BB8FCE', 
+          fontSize: 20, 
+          fontWeight: 800,
+          textShadow: '0 2px 12px rgba(155, 89, 182, 0.4)' 
         }}>
-          <span style={{ fontSize: 18, filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>{item.icon}</span>
-          <span style={{ color: 'rgba(255,255,255,0.9)', fontWeight: 500, fontSize: 13 }}>{item.name}</span>
-          <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(255,255,255,0.4)', fontWeight: 500, textTransform: 'uppercase' }}>{item.type}</span>
+          Pozo de los Deseos
+        </h3>
+        <p style={{ 
+          color: 'rgba(255,255,255,0.6)', 
+          fontSize: 12, 
+          margin: 0,
+          maxWidth: 280,
+          marginLeft: 'auto',
+          marginRight: 'auto',
+        }}>
+          Lanza tu moneda y propón una nueva app para nuestra Aldea. ¡Las mejores ideas cobrarán vida!
+        </p>
+      </div>
+
+      {/* Form */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* Título */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            color: '#BB8FCE', 
+            fontSize: 11, 
+            fontWeight: 700, 
+            marginBottom: 6,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            Título de la app *
+          </label>
+          <input
+            type="text"
+            value={wishForm.titulo}
+            onChange={(e) => setWishForm({...wishForm, titulo: e.target.value})}
+            placeholder="Ej: Tablón de Kudos"
+            style={{
+              width: '100%',
+              padding: '12px 14px',
+              borderRadius: 10,
+              border: '2px solid rgba(155, 89, 182, 0.3)',
+              background: 'rgba(0,0,0,0.3)',
+              color: 'white',
+              fontSize: 14,
+              fontFamily: "'Inter Tight', sans-serif",
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
         </div>
-      ))}
+
+        {/* Objetivo */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            color: '#BB8FCE', 
+            fontSize: 11, 
+            fontWeight: 700, 
+            marginBottom: 6,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            Objetivo *
+          </label>
+          <textarea
+            value={wishForm.objetivo}
+            onChange={(e) => setWishForm({...wishForm, objetivo: e.target.value})}
+            placeholder="¿Qué problema resuelve o qué valor aporta?"
+            rows={3}
+            style={{
+              width: '100%',
+              padding: '12px 14px',
+              borderRadius: 10,
+              border: '2px solid rgba(155, 89, 182, 0.3)',
+              background: 'rgba(0,0,0,0.3)',
+              color: 'white',
+              fontSize: 14,
+              fontFamily: "'Inter Tight', sans-serif",
+              outline: 'none',
+              resize: 'vertical',
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+
+        {/* Mecánica */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            color: '#BB8FCE', 
+            fontSize: 11, 
+            fontWeight: 700, 
+            marginBottom: 6,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            Mecánica / Funcionalidad
+          </label>
+          <textarea
+            value={wishForm.mecanica}
+            onChange={(e) => setWishForm({...wishForm, mecanica: e.target.value})}
+            placeholder="¿Cómo funcionaría? Describe la interacción..."
+            rows={3}
+            style={{
+              width: '100%',
+              padding: '12px 14px',
+              borderRadius: 10,
+              border: '2px solid rgba(155, 89, 182, 0.3)',
+              background: 'rgba(0,0,0,0.3)',
+              color: 'white',
+              fontSize: 14,
+              fontFamily: "'Inter Tight', sans-serif",
+              outline: 'none',
+              resize: 'vertical',
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+
+        {/* Área */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            color: '#BB8FCE', 
+            fontSize: 11, 
+            fontWeight: 700, 
+            marginBottom: 6,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            Área preferida del mapa
+          </label>
+          <select
+            value={wishForm.area}
+            onChange={(e) => setWishForm({...wishForm, area: e.target.value})}
+            style={{
+              width: '100%',
+              padding: '12px 14px',
+              borderRadius: 10,
+              border: '2px solid rgba(155, 89, 182, 0.3)',
+              background: 'rgba(0,0,0,0.3)',
+              color: 'white',
+              fontSize: 14,
+              fontFamily: "'Inter Tight', sans-serif",
+              outline: 'none',
+              boxSizing: 'border-box',
+              cursor: 'pointer',
+            }}
+          >
+            <option value="">Sin preferencia</option>
+            <option value="Plaza central (mercado)">🏪 Plaza central (mercado)</option>
+            <option value="Zona norte (bosque/nieve)">🌲 Zona norte (bosque/nieve)</option>
+            <option value="Zona sur (playa)">🏖️ Zona sur (playa)</option>
+            <option value="Cerca del río">🌊 Cerca del río</option>
+            <option value="Bar Las Nieves">🍺 Bar Las Nieves</option>
+            <option value="Nueva ubicación">📍 Nueva ubicación</option>
+          </select>
+        </div>
+
+        {/* Nombre */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            color: '#BB8FCE', 
+            fontSize: 11, 
+            fontWeight: 700, 
+            marginBottom: 6,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            Tu nombre *
+          </label>
+          <input
+            type="text"
+            value={wishForm.nombre}
+            onChange={(e) => setWishForm({...wishForm, nombre: e.target.value})}
+            placeholder="¿Quién lanza esta moneda al pozo?"
+            style={{
+              width: '100%',
+              padding: '12px 14px',
+              borderRadius: 10,
+              border: '2px solid rgba(155, 89, 182, 0.3)',
+              background: 'rgba(0,0,0,0.3)',
+              color: 'white',
+              fontSize: 14,
+              fontFamily: "'Inter Tight', sans-serif",
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+
+        {/* Submit Button */}
+        <button
+          onClick={handleWishSubmit}
+          style={{
+            marginTop: 8,
+            padding: '14px 24px',
+            borderRadius: 12,
+            border: 'none',
+            background: 'linear-gradient(135deg, #9B59B6 0%, #8E44AD 100%)',
+            color: 'white',
+            fontSize: 15,
+            fontWeight: 700,
+            fontFamily: "'Inter Tight', sans-serif",
+            cursor: 'pointer',
+            boxShadow: '0 4px 15px rgba(155, 89, 182, 0.4)',
+            transition: 'all 0.2s ease',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+          }}
+          onMouseOver={(e) => {
+            e.currentTarget.style.transform = 'translateY(-2px)';
+            e.currentTarget.style.boxShadow = '0 6px 20px rgba(155, 89, 182, 0.5)';
+          }}
+          onMouseOut={(e) => {
+            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.boxShadow = '0 4px 15px rgba(155, 89, 182, 0.4)';
+          }}
+        >
+          <span>🪙</span> Lanzar deseo al pozo
+        </button>
+
+        <p style={{ 
+          color: 'rgba(255,255,255,0.4)', 
+          fontSize: 10, 
+          textAlign: 'center',
+          margin: '8px 0 0 0',
+        }}>
+          * Campos obligatorios. Se abrirá tu cliente de correo.
+        </p>
+      </div>
     </div>
   );
 
@@ -5286,7 +5925,7 @@ export default function ToyVillageWorld() {
       case 'El Aula Magna': return <AulaMagnaApp />;
       case 'El Vórtice': return <VorticeApp />;
       case 'Configuración': return <ConfiguracionApp />;
-      case 'Explorador': return <ExploradorApp />;
+      case 'Pozo de los Deseos': return wellContent;
       case '¿Vas a llevar comida a la ofi?': return <MarketApp />;
       case 'La Taberna': return tabernaContent;
       default: return <div style={{ padding: 20 }}>App no encontrada</div>;
@@ -5323,6 +5962,30 @@ export default function ToyVillageWorld() {
           <span style={{ fontSize: 12, opacity: 0.7, fontWeight: 'normal' }}>Village Edition</span>
         </div>
       </div>
+
+      {/* SWIMMING MESSAGE - Shows when trying to swim too deep */}
+      {swimmingMessage && (
+        <div style={{
+          position: 'absolute',
+          top: '30%',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 300,
+          background: 'linear-gradient(135deg, #FF6B6B 0%, #EE5A5A 100%)',
+          color: 'white',
+          padding: '20px 40px',
+          borderRadius: 16,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+          fontFamily: "'Inter Tight', system-ui, sans-serif",
+          fontSize: 18,
+          fontWeight: 600,
+          textAlign: 'center',
+          animation: 'bounceIn 0.4s ease-out',
+        }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>🏊‍♂️🚫</div>
+          {swimmingMessage}
+        </div>
+      )}
 
       {/* ENTER PROMPT - Shows when near building */}
       {nearBuilding && !activeApp && (
@@ -5545,6 +6208,12 @@ export default function ToyVillageWorld() {
         @keyframes pulse {
           0%, 100% { transform: translateX(-50%) scale(1); }
           50% { transform: translateX(-50%) scale(1.02); }
+        }
+        
+        @keyframes bounceIn {
+          0% { transform: translateX(-50%) scale(0.5); opacity: 0; }
+          60% { transform: translateX(-50%) scale(1.1); opacity: 1; }
+          100% { transform: translateX(-50%) scale(1); opacity: 1; }
         }
         
         /* GUMMY BUTTON BASE */
