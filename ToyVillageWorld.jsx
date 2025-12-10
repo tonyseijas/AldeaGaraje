@@ -144,6 +144,26 @@ export default function ToyVillageWorld() {
   // Swimming message (deep sea)
   const [swimmingMessage, setSwimmingMessage] = useState(null);
   const swimmingMessageShown = useRef(false);
+  
+  // Beach ball game refs
+  const beachBallRef = useRef(null);
+  const beachKidsRef = useRef([]);
+  const ballStateRef = useRef({
+    x: 0, z: 180,
+    vx: 0, vz: 0,
+    height: 1.2,
+    vy: 0,
+    isFlying: false,
+    targetKidIndex: 0,
+    currentKidIndex: -1,
+    fetchingKidIndex: -1,
+    waitTimer: 0,
+  });
+  
+  // Drowning mechanic
+  const [waterOverlay, setWaterOverlay] = useState(0); // 0-1 opacity for water covering screen
+  const [isDrowning, setIsDrowning] = useState(false);
+  const [isRespawning, setIsRespawning] = useState(false);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -173,16 +193,15 @@ export default function ToyVillageWorld() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.LinearToneMapping;
-    renderer.toneMappingExposure = 0.7; // Even softer exposure
+    renderer.toneMapping = THREE.NoToneMapping; // Disable tone mapping for consistent brightness
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     containerRef.current.appendChild(renderer.domElement);
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Very high ambient = minimal contrast
+    // Lighting - bright and consistent
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.4); // High ambient for bright look
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xfffaf0, 0.5); // Very soft sun
+    const sunLight = new THREE.DirectionalLight(0xfffaf0, 0.8); // Brighter sun
     sunLight.position.set(150, 200, 100);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.width = 4096;
@@ -195,7 +214,7 @@ export default function ToyVillageWorld() {
     sunLight.shadow.camera.bottom = -250;
     scene.add(sunLight);
 
-    const rimLight = new THREE.DirectionalLight(0xffeedd, 0.15); // Very soft rim
+    const rimLight = new THREE.DirectionalLight(0xffeedd, 0.3); // Brighter rim
     rimLight.position.set(-100, 80, -100);
     scene.add(rimLight);
 
@@ -220,19 +239,22 @@ export default function ToyVillageWorld() {
     
     // EXCLUSION ZONES - areas where trees/rocks should NOT spawn
     const EXCLUSION_ZONES = [
-      { x: -90, z: 55, r: 20 },    // Tribal House
-      { x: -60, z: 55, r: 15 },    // Orchard area
-      { x: 60, z: 45, r: 18 },     // Mediterranean House
-      { x: -50, z: 10, r: 18 },    // Cottage House
-      { x: -170, z: -170, r: 30 }, // Ice Cave House
-      { x: -32, z: 12, r: 10 },    // Well next to cottage
-      { x: 10, z: -55, r: 12 },    // Well alto
-      { x: 25, z: 32, r: 20 },     // Market area
-      { x: 155, z: 23, r: 35 },    // Bar Las Nieves
-      { x: 45, z: -45, r: 15 },    // Jacuzzi
-      { x: -10, z: 85, r: 15 },    // Bridge
-      { x: -85, z: 75, r: 10 },    // Canoe
-      { x: 0, z: 180, r: 100 },    // Beach area (no trees on beach - extended)
+      // === MAIN PLAZA (4 buildings + well) ===
+      { x: -70, z: 35, r: 55 },     // Main plaza area
+      { x: -100, z: 55, r: 20 },    // Tribal House (NW plaza)
+      { x: -40, z: 55, r: 20 },     // Bar Las Nieves (NE plaza)
+      { x: -100, z: 15, r: 18 },    // Cottage House (SW plaza)
+      { x: -40, z: 15, r: 18 },     // Library (SE plaza)
+      { x: -70, z: 8, r: 10 },      // Well (center bottom of plaza)
+      // === OTHER BUILDINGS ===
+      { x: 60, z: 45, r: 18 },      // Mediterranean House
+      { x: -170, z: -170, r: 30 },  // Ice Cave House
+      { x: 10, z: -55, r: 12 },     // Well alto (north)
+      { x: 25, z: 32, r: 20 },      // Market area
+      { x: 45, z: -45, r: 15 },     // Jacuzzi
+      { x: -10, z: 85, r: 15 },     // Bridge
+      { x: -85, z: 75, r: 10 },     // Canoe
+      { x: 0, z: 180, r: 100 },     // Beach area (no trees on beach)
     ];
     
     function isInExclusionZone(x, z) {
@@ -246,7 +268,8 @@ export default function ToyVillageWorld() {
     // Beach and sea zones - extended grass area before beach
     const BEACH_START_Z = 140;  // Beach starts further south (more grass)
     const SEA_START_Z = 200;    // Sea begins here
-    const SEA_DEEP_Z = 220;     // Deep sea - can't swim further
+    const SEA_DEEP_Z = 220;     // Deep sea starts here
+    const SEA_DEATH_Z = 270;    // Player drowns at this depth
     
     function isOnBeach(x, z) {
       return z > BEACH_START_Z && z < SEA_START_Z;
@@ -258,6 +281,10 @@ export default function ToyVillageWorld() {
     
     function isInDeepSea(x, z) {
       return z >= SEA_DEEP_Z;
+    }
+    
+    function isInDeathZone(x, z) {
+      return z >= SEA_DEATH_Z;
     }
     
     // Height calculation - smooth valley with river at south
@@ -293,8 +320,8 @@ export default function ToyVillageWorld() {
       
       // Bar area - characters walk at GROUND LEVEL around the bar
       // The bar structure is on a deck, but the floor where characters walk is ground level
-      const BAR_X = 155;
-      const BAR_Z = 23;
+      const BAR_X = -40;  // New position: NE corner of main plaza
+      const BAR_Z = 55;
       const barDistSq = (x - BAR_X) ** 2 + (z - BAR_Z) ** 2;
       const barRadius = 22 * 1.2; // Scale 1.2
       
@@ -356,9 +383,12 @@ export default function ToyVillageWorld() {
 
     // Create visual terrain mesh
     function createTerrainMesh() {
-      const size = 560; // Extended map (400 + 80*2)
-      const segments = 120;
-      const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
+      // Asymmetric terrain: expanded 500 north/east/west, south stays for sea
+      const sizeX = 1560; // -780 to +780
+      const sizeZ = 1060; // -780 (north) to +280 (south/sea)
+      const segmentsX = 180;
+      const segmentsZ = 130;
+      const geometry = new THREE.PlaneGeometry(sizeX, sizeZ, segmentsX, segmentsZ);
       
       const positions = geometry.attributes.position.array;
       
@@ -375,23 +405,31 @@ export default function ToyVillageWorld() {
       const seaR = 0x48 / 255, seaG = 0xD1 / 255, seaB = 0xCC / 255;
       // Deep sea
       const deepSeaR = 0x20 / 255, deepSeaG = 0xB2 / 255, deepSeaB = 0xAA / 255;
+      // Very deep sea (death zone)
+      const veryDeepR = 0x10 / 255, veryDeepG = 0x80 / 255, veryDeepB = 0x70 / 255;
+      
+      // Offset Z to center the asymmetric terrain: center is at (-780+280)/2 = -250
+      const zOffset = -250;
       
       for (let i = 0; i < positions.length; i += 3) {
         const x = positions[i];
         const z = positions[i + 1]; // In local space before rotation
-        const worldZ = -z; // After rotation this becomes world Z
+        const worldZ = -z + zOffset; // After rotation and offset
         
         positions[i + 2] = getTerrainHeight(x, worldZ);
         
         // Determine color based on zone
         let r, g, b;
         
-        if (worldZ >= SEA_START_Z) {
-          // Sea zone
-          const seaDepth = Math.min(1, (worldZ - SEA_START_Z) / 30);
-          r = seaR + (deepSeaR - seaR) * seaDepth;
-          g = seaG + (deepSeaG - seaG) * seaDepth;
-          b = seaB + (deepSeaB - seaB) * seaDepth;
+        if (worldZ >= SEA_DEATH_Z) {
+          // Death zone - very deep
+          r = veryDeepR; g = veryDeepG; b = veryDeepB;
+        } else if (worldZ >= SEA_START_Z) {
+          // Sea zone - gradual depth
+          const seaDepth = Math.min(1, (worldZ - SEA_START_Z) / 70);
+          r = seaR + (veryDeepR - seaR) * seaDepth;
+          g = seaG + (veryDeepG - seaG) * seaDepth;
+          b = seaB + (veryDeepB - seaB) * seaDepth;
         } else if (worldZ >= BEACH_START_Z) {
           // Beach zone - sand
           r = sandR;
@@ -399,7 +437,7 @@ export default function ToyVillageWorld() {
           b = sandB;
         } else if (worldZ < -30) {
           // Frozen zone - snow color with slight gradient
-          const frozenDepth = Math.min(1, (-30 - worldZ) / 60); // 0 at z=-30, 1 at z=-90
+          const frozenDepth = Math.min(1, (-30 - worldZ) / 200); // Extended for larger map
           // Blend to pure snow
           r = grassR + (snowR - grassR) * (0.7 + frozenDepth * 0.3);
           g = grassG + (snowG - grassG) * (0.7 + frozenDepth * 0.3);
@@ -434,6 +472,7 @@ export default function ToyVillageWorld() {
       
       const terrain = new THREE.Mesh(geometry, terrainMat);
       terrain.rotation.x = -Math.PI / 2;
+      terrain.position.z = zOffset; // Offset to match world coordinates
       terrain.receiveShadow = true;
       scene.add(terrain);
       
@@ -555,8 +594,8 @@ export default function ToyVillageWorld() {
       // River flows West to East at southern edge
       // Use a flat plane instead of tube to avoid terrain clipping
       const riverWidth = 24;
-      const riverLength = 520; // Extended for larger map
-      const segments = 80;
+      const riverLength = 1560; // Extended for much larger map
+      const segments = 150;
       
       const riverGeom = new THREE.PlaneGeometry(riverLength, riverWidth, segments, 1);
       const positions = riverGeom.attributes.position.array;
@@ -629,8 +668,8 @@ export default function ToyVillageWorld() {
 
     // ============ SEA ============
     function createSea() {
-      // Sea water plane - extended to match new map size
-      const seaGeom = new THREE.PlaneGeometry(560, 100, 50, 12);
+      // Sea water plane - extended for new map size and deeper drowning zone
+      const seaGeom = new THREE.PlaneGeometry(1600, 100, 60, 15);
       const seaMat = new THREE.MeshStandardMaterial({
         color: 0x48D1CC,
         roughness: 0.1,
@@ -640,13 +679,13 @@ export default function ToyVillageWorld() {
       });
       const sea = new THREE.Mesh(seaGeom, seaMat);
       sea.rotation.x = -Math.PI / 2;
-      sea.position.set(0, 0, SEA_START_Z + 50);
+      sea.position.set(0, -1, SEA_START_Z + 50);
       scene.add(sea);
       
       // Gentle waves decoration
-      for (let i = 0; i < 25; i++) {
-        const waveX = (Math.random() - 0.5) * 500;
-        const waveZ = SEA_START_Z + 5 + Math.random() * 50;
+      for (let i = 0; i < 50; i++) {
+        const waveX = (Math.random() - 0.5) * 1500;
+        const waveZ = SEA_START_Z + 5 + Math.random() * 60;
         const waveMat = new THREE.MeshStandardMaterial({
           color: 0xFFFFFF,
           roughness: 0.8,
@@ -815,7 +854,136 @@ export default function ToyVillageWorld() {
       return group;
     }
     
-    // Place beach items - positioned in new beach zone (140-200)
+    // ============ INTERACTIVE BEACH BALL GAME ============
+    // Kids play catch. If player hits ball, it bounces and a kid fetches it.
+    
+    function createInteractiveBeachBall(x, z) {
+      const y = getTerrainHeight(x, z);
+      const group = new THREE.Group();
+      
+      // Ball with stripes
+      const ballSize = 1.2;
+      const ballMat1 = createGlossyMaterial(0xFF4444);
+      const ballMat2 = createGlossyMaterial(0xFFFF44);
+      const ballMat3 = createGlossyMaterial(0x4444FF);
+      
+      const ball = new THREE.Mesh(
+        new THREE.SphereGeometry(ballSize, 16, 16),
+        ballMat1
+      );
+      ball.position.y = ballSize;
+      group.add(ball);
+      
+      // Stripe rings
+      const stripe1 = new THREE.Mesh(
+        new THREE.TorusGeometry(ballSize * 0.9, 0.15, 8, 16),
+        ballMat2
+      );
+      stripe1.position.y = ballSize;
+      stripe1.rotation.x = Math.PI / 2;
+      group.add(stripe1);
+      
+      const stripe2 = new THREE.Mesh(
+        new THREE.TorusGeometry(ballSize * 0.9, 0.15, 8, 16),
+        ballMat3
+      );
+      stripe2.position.y = ballSize;
+      group.add(stripe2);
+      
+      group.position.set(x, y, z);
+      scene.add(group);
+      
+      ballStateRef.current.x = x;
+      ballStateRef.current.z = z;
+      beachBallRef.current = group;
+      
+      return group;
+    }
+    
+    function createInteractiveBeachKid(x, z, shirtColor, index) {
+      const group = new THREE.Group();
+      const y = getTerrainHeight(x, z);
+      
+      const skinMat = createGlossyMaterial(0xFFDBB4);
+      const shirtMat = createGlossyMaterial(shirtColor);
+      const shortsMat = createGlossyMaterial(0x4169E1);
+      const hairMat = createGlossyMaterial(0x3D2314);
+      
+      // Body
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.8, 0.6, 2, 8),
+        shirtMat
+      );
+      body.position.y = 2.5;
+      group.add(body);
+      
+      // Head
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.7, 12, 12),
+        skinMat
+      );
+      head.position.y = 4;
+      group.add(head);
+      
+      // Hair
+      const hair = new THREE.Mesh(
+        new THREE.SphereGeometry(0.75, 12, 12),
+        hairMat
+      );
+      hair.position.y = 4.2;
+      hair.scale.y = 0.6;
+      group.add(hair);
+      
+      // Legs
+      const legL = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.2, 1.2, 6),
+        shortsMat
+      );
+      legL.position.set(-0.3, 0.9, 0);
+      group.add(legL);
+      
+      const legR = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.2, 1.2, 6),
+        shortsMat
+      );
+      legR.position.set(0.3, 0.9, 0);
+      group.add(legR);
+      
+      // Arms (will animate)
+      const armL = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.15, 0.15, 1, 6),
+        skinMat
+      );
+      armL.position.set(-1, 3, 0);
+      armL.rotation.z = 0.5;
+      armL.name = 'armL';
+      group.add(armL);
+      
+      const armR = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.15, 0.15, 1, 6),
+        skinMat
+      );
+      armR.position.set(1, 3, 0);
+      armR.rotation.z = -0.5;
+      armR.name = 'armR';
+      group.add(armR);
+      
+      group.position.set(x, y, z);
+      group.userData = {
+        homeX: x,
+        homeZ: z,
+        index: index,
+        targetX: x,
+        targetZ: z,
+        state: 'idle', // idle, throwing, fetching, returning
+      };
+      scene.add(group);
+      
+      beachKidsRef.current.push(group);
+      return group;
+    }
+    
+    // Place beach items
     createBeachUmbrella(-40, 160, 0xFF6B6B);
     createBeachUmbrella(20, 168, 0x4ECDC4);
     createBeachUmbrella(70, 155, 0xFFE66D);
@@ -829,13 +997,15 @@ export default function ToyVillageWorld() {
     createBeachTowel(-75, 175, 0x6BCB77);
     createBeachTowel(115, 167, 0xA29BFE);
     
-    // Beach ball between kids
-    createBeachBall(0, 180);
+    // Create interactive ball and kids
+    createInteractiveBeachBall(0, 178);
+    createInteractiveBeachKid(-12, 185, 0xFF6B6B, 0);
+    createInteractiveBeachKid(14, 175, 0x4ECDC4, 1);
+    createInteractiveBeachKid(0, 168, 0xFFE66D, 2);
     
-    // Kids playing
-    createBeachKid(-10, 185, 0xFF6B6B);
-    createBeachKid(12, 178, 0x4ECDC4);
-    createBeachKid(-5, 172, 0xFFE66D);
+    // Ball starts with kid 0
+    ballStateRef.current.currentKidIndex = 0;
+    ballStateRef.current.waitTimer = 2000;
 
     // ============ BRIDGES ============
     function createWoodenBridge(x, z, rotation = 0, length = 30) {
@@ -1480,8 +1650,8 @@ export default function ToyVillageWorld() {
       return group;
     }
     
-    // Tribal House - West side, NORTH of river (z=55), facing NORTH
-    placeBuilding(createTribalHouse, -90, 55, 1, 0);
+    // Tribal House - NW corner of main plaza
+    placeBuilding(createTribalHouse, -100, 55, 1, 0);
     
     // ============ BAR "LAS NIEVES" ============
     function createBar(x, y, z, scale = 1) {
@@ -1797,10 +1967,10 @@ export default function ToyVillageWorld() {
       return group;
     }
     
-    // Place Bar "Las Nieves" in the east, north of river
-    const BAR_X = 155;
-    const BAR_Z = 23;
-    const BAR_SCALE = 1.2; // Slightly smaller than temple was
+    // Place Bar "Las Nieves" in the main plaza (NE corner)
+    const BAR_X = -40;
+    const BAR_Z = 55;
+    const BAR_SCALE = 1.2;
     const barBaseY = getTerrainHeight(BAR_X, BAR_Z);
     createBar(BAR_X, barBaseY, BAR_Z, BAR_SCALE);
     
@@ -1813,16 +1983,18 @@ export default function ToyVillageWorld() {
     // ============ BUILDING APP LOCATIONS ============
     // These define clickable/enterable buildings
     const buildingLocations = [
-      { id: 'tribal', x: -90, z: 55, radius: 18, app: BUILDING_APPS.tribal },
+      // Main plaza buildings
+      { id: 'tribal', x: -100, z: 55, radius: 18, app: BUILDING_APPS.tribal },
+      { id: 'cottage', x: -100, z: 15, radius: 16, app: BUILDING_APPS.cottage },
+      { id: 'temple', x: BAR_X, z: BAR_Z, radius: 10, app: BUILDING_APPS.temple },
+      // Pozo de los Deseos - center bottom of plaza
+      { id: 'well1', x: -70, z: 8, radius: 8, app: BUILDING_APPS.well },
+      // Other buildings
       { id: 'mediterranean', x: 60, z: 45, radius: 16, app: BUILDING_APPS.mediterranean },
-      { id: 'cottage', x: -50, z: 10, radius: 16, app: BUILDING_APPS.cottage },
       { id: 'icecave', x: -170, z: -170, radius: 20, app: BUILDING_APPS.icecave },
-      { id: 'well1', x: -32, z: 12, radius: 8, app: BUILDING_APPS.well },
       { id: 'well2', x: 10, z: -55, radius: 10, app: BUILDING_APPS.well },
       // Market area - the healthy food stalls
       { id: 'market', x: 25, z: 32, radius: 14, app: BUILDING_APPS.market },
-      // Bar "Las Nieves" - central area where horn can be activated
-      { id: 'temple', x: BAR_X, z: BAR_Z, radius: 10, app: BUILDING_APPS.temple },
     ];
     
     // Function to check if player is near any building
@@ -2153,8 +2325,8 @@ export default function ToyVillageWorld() {
     // Mediterranean House - East side, north of river
     placeBuilding(createMediterraneanHouse, 60, 45, 0.9, -0.3);
     
-    // Cottage House - Central area, mid elevation
-    placeBuilding(createCottageHouse, -50, 10, 0.85, 0.4);
+    // Cottage House - SW corner of main plaza
+    placeBuilding(createCottageHouse, -100, 15, 0.85, 0.4);
     
     // Ice Cave House - NORTHWEST corner (frozen fjords) - door facing south
     placeBuilding(createIceCaveHouse, -170, -170, 1.1, 0);
@@ -2320,12 +2492,300 @@ export default function ToyVillageWorld() {
       return group;
     }
 
-    // Well next to cottage (east side of cottage at x=-50, z=10)
-    // Cottage is ~12 units wide, so east side is around x=-38
-    createWell(-32, getTerrainHeight(-32, 12), 12, 0.8);
+    // Pozo de los Deseos - center bottom of main plaza
+    createWell(-70, getTerrainHeight(-70, 8), 8, 1);
     
-    // Pozo Mayor - highest point (smaller scale too)
-    createWell(10, getTerrainHeight(10, -55), -55, 1);
+    // Pozo Mayor - north area (smaller scale)
+    createWell(10, getTerrainHeight(10, -55), -55, 0.9);
+
+    // ============ MAIN PLAZA (COBBLESTONE FLOOR) ============
+    function createPlazaFloor() {
+      const plazaGroup = new THREE.Group();
+      
+      // Plaza dimensions
+      const plazaCenterX = -70;
+      const plazaCenterZ = 35;
+      const plazaWidth = 80;
+      const plazaDepth = 60;
+      
+      // Main cobblestone floor
+      const floorGeom = new THREE.PlaneGeometry(plazaWidth, plazaDepth, 20, 15);
+      const positions = floorGeom.attributes.position.array;
+      
+      // Slight height variation for natural look
+      for (let i = 0; i < positions.length; i += 3) {
+        const localX = positions[i];
+        const localZ = positions[i + 1];
+        const worldX = plazaCenterX + localX;
+        const worldZ = plazaCenterZ - localZ;
+        positions[i + 2] = getTerrainHeight(worldX, worldZ) + 0.1 + Math.random() * 0.05;
+      }
+      floorGeom.computeVertexNormals();
+      
+      const cobbleMat = new THREE.MeshStandardMaterial({
+        color: 0x8B7355,
+        roughness: 0.8,
+        metalness: 0.05,
+      });
+      
+      const floor = new THREE.Mesh(floorGeom, cobbleMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set(plazaCenterX, 0, plazaCenterZ);
+      plazaGroup.add(floor);
+      
+      // Decorative cobblestone pattern (darker stones)
+      const stoneMat = createGlossyMaterial(0x6B5344, 0.1);
+      for (let i = 0; i < 120; i++) {
+        const stoneX = plazaCenterX + (Math.random() - 0.5) * (plazaWidth - 4);
+        const stoneZ = plazaCenterZ + (Math.random() - 0.5) * (plazaDepth - 4);
+        const stoneY = getTerrainHeight(stoneX, stoneZ) + 0.15;
+        
+        const stone = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.4 + Math.random() * 0.3, 0.5 + Math.random() * 0.3, 0.1, 6),
+          stoneMat
+        );
+        stone.position.set(stoneX, stoneY, stoneZ);
+        stone.rotation.y = Math.random() * Math.PI;
+        plazaGroup.add(stone);
+      }
+      
+      // Benches around the plaza
+      const benchMat = createGlossyMaterial(0x5D4037, 0.2);
+      const benchPositions = [
+        { x: plazaCenterX - 35, z: plazaCenterZ, rot: Math.PI / 2 },
+        { x: plazaCenterX + 35, z: plazaCenterZ, rot: -Math.PI / 2 },
+        { x: plazaCenterX, z: plazaCenterZ - 25, rot: 0 },
+      ];
+      
+      benchPositions.forEach(pos => {
+        const benchGroup = new THREE.Group();
+        const benchY = getTerrainHeight(pos.x, pos.z);
+        
+        // Bench seat
+        const seat = new THREE.Mesh(
+          new THREE.BoxGeometry(6, 0.4, 2),
+          benchMat
+        );
+        seat.position.y = 1.5;
+        benchGroup.add(seat);
+        
+        // Bench legs
+        [-2.5, 2.5].forEach(legX => {
+          const leg = new THREE.Mesh(
+            new THREE.BoxGeometry(0.4, 1.5, 1.8),
+            benchMat
+          );
+          leg.position.set(legX, 0.75, 0);
+          benchGroup.add(leg);
+        });
+        
+        benchGroup.position.set(pos.x, benchY, pos.z);
+        benchGroup.rotation.y = pos.rot;
+        plazaGroup.add(benchGroup);
+      });
+      
+      // Decorative lantern posts at corners
+      const lanternMat = createGlossyMaterial(0x2C2C2C, 0.3);
+      const glassMat = createGlossyMaterial(0xFFE4B5, 0.1);
+      
+      const lanternPositions = [
+        { x: plazaCenterX - 30, z: plazaCenterZ + 20 },
+        { x: plazaCenterX + 30, z: plazaCenterZ + 20 },
+        { x: plazaCenterX - 30, z: plazaCenterZ - 20 },
+        { x: plazaCenterX + 30, z: plazaCenterZ - 20 },
+      ];
+      
+      lanternPositions.forEach(pos => {
+        const lanternGroup = new THREE.Group();
+        const lanternY = getTerrainHeight(pos.x, pos.z);
+        
+        // Post
+        const post = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.3, 0.4, 6, 8),
+          lanternMat
+        );
+        post.position.y = 3;
+        lanternGroup.add(post);
+        
+        // Lantern housing
+        const housing = new THREE.Mesh(
+          new THREE.BoxGeometry(1.2, 1.5, 1.2),
+          lanternMat
+        );
+        housing.position.y = 6.5;
+        lanternGroup.add(housing);
+        
+        // Glowing glass
+        const glass = new THREE.Mesh(
+          new THREE.BoxGeometry(0.8, 1, 0.8),
+          glassMat
+        );
+        glass.position.y = 6.5;
+        lanternGroup.add(glass);
+        
+        lanternGroup.position.set(pos.x, lanternY, pos.z);
+        plazaGroup.add(lanternGroup);
+      });
+      
+      scene.add(plazaGroup);
+    }
+    createPlazaFloor();
+
+    // ============ LIBRARY BUILDING (SE corner of plaza) ============
+    function createLibrary(x, y, z, scale = 1) {
+      const group = new THREE.Group();
+      
+      // Materials
+      const stoneMat = createGlossyMaterial(0x8B7355, 0.15);
+      const darkStoneMat = createGlossyMaterial(0x5D4037, 0.1);
+      const roofMat = createGlossyMaterial(0x4A3728, 0.2);
+      const windowMat = createGlossyMaterial(0x87CEEB, 0.3);
+      const doorMat = createGlossyMaterial(0x5D3A1A, 0.15);
+      const goldMat = createGlossyMaterial(0xDAA520, 0.4);
+      
+      // Main building - rectangular with classical proportions
+      const mainWidth = 16 * scale;
+      const mainDepth = 12 * scale;
+      const mainHeight = 12 * scale;
+      
+      const mainBody = new THREE.Mesh(
+        new THREE.BoxGeometry(mainWidth, mainHeight, mainDepth),
+        stoneMat
+      );
+      mainBody.position.y = mainHeight / 2;
+      group.add(mainBody);
+      
+      // Classical columns at entrance
+      const columnMat = createGlossyMaterial(0xF5F5DC, 0.1);
+      for (let i = 0; i < 4; i++) {
+        const columnX = -mainWidth / 2 + 3 + i * 3.5;
+        const column = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.6 * scale, 0.7 * scale, 10 * scale, 12),
+          columnMat
+        );
+        column.position.set(columnX * scale, 5 * scale, mainDepth / 2 + 1 * scale);
+        group.add(column);
+        
+        // Column capital
+        const capital = new THREE.Mesh(
+          new THREE.BoxGeometry(1.4 * scale, 0.8 * scale, 1.4 * scale),
+          columnMat
+        );
+        capital.position.set(columnX * scale, 10.5 * scale, mainDepth / 2 + 1 * scale);
+        group.add(capital);
+      }
+      
+      // Entrance portico roof
+      const porticoRoof = new THREE.Mesh(
+        new THREE.BoxGeometry(mainWidth * 0.9, 0.8 * scale, 4 * scale),
+        darkStoneMat
+      );
+      porticoRoof.position.set(0, 11 * scale, mainDepth / 2 + 2 * scale);
+      group.add(porticoRoof);
+      
+      // Main roof - gabled
+      const roofGeom = new THREE.BufferGeometry();
+      const roofVertices = new Float32Array([
+        // Front face
+        -mainWidth / 2, mainHeight, mainDepth / 2,
+        mainWidth / 2, mainHeight, mainDepth / 2,
+        0, mainHeight + 5 * scale, 0,
+        // Back face
+        mainWidth / 2, mainHeight, -mainDepth / 2,
+        -mainWidth / 2, mainHeight, -mainDepth / 2,
+        0, mainHeight + 5 * scale, 0,
+        // Left side
+        -mainWidth / 2, mainHeight, -mainDepth / 2,
+        -mainWidth / 2, mainHeight, mainDepth / 2,
+        0, mainHeight + 5 * scale, 0,
+        // Right side
+        mainWidth / 2, mainHeight, mainDepth / 2,
+        mainWidth / 2, mainHeight, -mainDepth / 2,
+        0, mainHeight + 5 * scale, 0,
+      ]);
+      roofGeom.setAttribute('position', new THREE.BufferAttribute(roofVertices, 3));
+      roofGeom.computeVertexNormals();
+      
+      const roof = new THREE.Mesh(roofGeom, roofMat);
+      group.add(roof);
+      
+      // Windows (arched)
+      const windowPositions = [
+        { x: -5, z: mainDepth / 2 + 0.1 },
+        { x: 5, z: mainDepth / 2 + 0.1 },
+        { x: -5, z: -mainDepth / 2 - 0.1 },
+        { x: 5, z: -mainDepth / 2 - 0.1 },
+      ];
+      
+      windowPositions.forEach(pos => {
+        // Window frame (arched top)
+        const windowFrame = new THREE.Mesh(
+          new THREE.BoxGeometry(2 * scale, 4 * scale, 0.3 * scale),
+          windowMat
+        );
+        windowFrame.position.set(pos.x * scale, 6 * scale, pos.z * scale);
+        group.add(windowFrame);
+        
+        // Arch top
+        const arch = new THREE.Mesh(
+          new THREE.CylinderGeometry(1 * scale, 1 * scale, 0.3 * scale, 16, 1, false, 0, Math.PI),
+          windowMat
+        );
+        arch.rotation.x = Math.PI / 2;
+        arch.rotation.z = Math.PI / 2;
+        arch.position.set(pos.x * scale, 8 * scale, pos.z * scale);
+        group.add(arch);
+      });
+      
+      // Main door
+      const door = new THREE.Mesh(
+        new THREE.BoxGeometry(3 * scale, 5 * scale, 0.3 * scale),
+        doorMat
+      );
+      door.position.set(0, 2.5 * scale, mainDepth / 2 + 0.2 * scale);
+      group.add(door);
+      
+      // Door arch
+      const doorArch = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.5 * scale, 1.5 * scale, 0.3 * scale, 16, 1, false, 0, Math.PI),
+        doorMat
+      );
+      doorArch.rotation.x = Math.PI / 2;
+      doorArch.rotation.z = Math.PI / 2;
+      doorArch.position.set(0, 5 * scale, mainDepth / 2 + 0.2 * scale);
+      group.add(doorArch);
+      
+      // Book symbol above door
+      const bookMat = createGlossyMaterial(0x8B4513, 0.2);
+      const book = new THREE.Mesh(
+        new THREE.BoxGeometry(2.5 * scale, 0.5 * scale, 1.8 * scale),
+        bookMat
+      );
+      book.position.set(0, 8 * scale, mainDepth / 2 + 0.5 * scale);
+      group.add(book);
+      
+      // Sign: "BIBLIOTECA"
+      // (Would need text geometry or sprite, keeping simple for now)
+      
+      // Steps at entrance
+      for (let i = 0; i < 3; i++) {
+        const step = new THREE.Mesh(
+          new THREE.BoxGeometry(mainWidth * 0.7, 0.4 * scale, 1.5 * scale),
+          darkStoneMat
+        );
+        step.position.set(0, 0.2 * scale + i * 0.4 * scale, mainDepth / 2 + 4 * scale - i * 1.2 * scale);
+        group.add(step);
+      }
+      
+      group.position.set(x, y, z);
+      scene.add(group);
+      return group;
+    }
+    
+    // Place Library at SE corner of plaza
+    const libraryX = -40;
+    const libraryZ = 15;
+    createLibrary(libraryX, getTerrainHeight(libraryX, libraryZ), libraryZ, 0.85);
 
     // ============ TREES ============
     function createTree(x, y, z, type = 'normal', scale = 1) {
@@ -3480,15 +3940,17 @@ export default function ToyVillageWorld() {
             
             // Check if valid (not in water for ground animals)
             if (ai.isFlying || !isInRiver(newX, newZ)) {
-              // Also check bar exclusion zone (animals NEVER enter bar area)
-              const BAR_X = 155, BAR_Z = 23, BAR_RADIUS = 18;
+              // Also check bar/plaza exclusion zone (animals NEVER enter bar area)
+              const BAR_X = -40, BAR_Z = 55, BAR_RADIUS = 18;
+              const PLAZA_X = -70, PLAZA_Z = 35, PLAZA_RADIUS = 45;
               const distToBar = Math.sqrt((newX - BAR_X) ** 2 + (newZ - BAR_Z) ** 2);
+              const distToPlaza = Math.sqrt((newX - PLAZA_X) ** 2 + (newZ - PLAZA_Z) ** 2);
               
               // Beach exclusion (animals stay off beach)
               const BEACH_LIMIT_Z = 138;
               
-              if (distToBar > BAR_RADIUS && newZ < BEACH_LIMIT_Z) {
-                break; // Valid position - outside bar zone and not on beach
+              if (distToBar > BAR_RADIUS && distToPlaza > PLAZA_RADIUS && newZ < BEACH_LIMIT_Z) {
+                break; // Valid position - outside bar/plaza zone and not on beach
               }
               // If invalid, keep trying for a new position
             }
@@ -3527,16 +3989,26 @@ export default function ToyVillageWorld() {
             }
           }
           
-          // Bar exclusion zone (animals NEVER enter bar area, even when congregated)
+          // Bar/plaza exclusion zone (animals NEVER enter bar/plaza area, even when congregated)
           if (!ai.isFlying) {
-            const BAR_X = 155, BAR_Z = 23, BAR_RADIUS = 18;
+            const BAR_X = -40, BAR_Z = 55, BAR_RADIUS = 18;
+            const PLAZA_X = -70, PLAZA_Z = 35, PLAZA_RADIUS = 45;
             const distToBar = Math.sqrt((nextX - BAR_X) ** 2 + (nextZ - BAR_Z) ** 2);
+            const distToPlaza = Math.sqrt((nextX - PLAZA_X) ** 2 + (nextZ - PLAZA_Z) ** 2);
             if (distToBar < BAR_RADIUS) {
               // Push away from bar - stay at perimeter
               const awayAngle = Math.atan2(nextZ - BAR_Z, nextX - BAR_X);
               nextX = BAR_X + Math.cos(awayAngle) * BAR_RADIUS;
               nextZ = BAR_Z + Math.sin(awayAngle) * BAR_RADIUS;
               // Stop and pick new target
+              ai.state = 0;
+              ai.stateTimer = 500;
+            }
+            if (distToPlaza < PLAZA_RADIUS) {
+              // Push away from plaza
+              const awayAngle = Math.atan2(nextZ - PLAZA_Z, nextX - PLAZA_X);
+              nextX = PLAZA_X + Math.cos(awayAngle) * PLAZA_RADIUS;
+              nextZ = PLAZA_Z + Math.sin(awayAngle) * PLAZA_RADIUS;
               ai.state = 0;
               ai.stateTimer = 500;
             }
@@ -3693,9 +4165,9 @@ export default function ToyVillageWorld() {
     }
 
     function canMoveTo(x, z) {
-      // World boundary - rectangular, matching terrain size (560x560)
-      // Terrain goes from -280 to 280, allow walking to -270 to 270
-      if (x < -270 || x > 270 || z < -270 || z > 270) return false;
+      // World boundary - asymmetric, expanded north/east/west
+      // X: -770 to +770, Z: -770 (north) to +280 (south/sea)
+      if (x < -770 || x > 770 || z < -770 || z > 280) return false;
 
       // River is now passable! But you'll drift...
       // No river collision - player can enter the water
@@ -4198,10 +4670,43 @@ export default function ToyVillageWorld() {
       const playerOnBeach = isOnBeach(playerState.x, playerState.z);
       const playerInSea = isInSea(playerState.x, playerState.z);
       const playerInDeepSea = isInDeepSea(playerState.x, playerState.z);
+      const playerInDeathZone = isInDeathZone(playerState.x, playerState.z);
       const iceFactor = getIceFactor(playerState.z);
       
-      // Check for deep sea - show message
-      if (playerInDeepSea && !swimmingMessageShown.current) {
+      // Calculate water depth for gradual overlay (deeper = more covered)
+      if (playerInSea && !isRespawning) {
+        const seaDepthProgress = Math.min(1, (playerState.z - SEA_START_Z) / (SEA_DEATH_Z - SEA_START_Z));
+        setWaterOverlay(seaDepthProgress * 0.7); // Max 70% opacity before death
+        
+        // Check for death zone
+        if (playerInDeathZone && !isDrowning) {
+          setIsDrowning(true);
+          setSwimmingMessage('💀 ¡GLUB GLUB GLUB! 💀');
+          
+          // Drowning animation and respawn
+          setTimeout(() => {
+            setWaterOverlay(1); // Full water overlay
+          }, 500);
+          
+          setTimeout(() => {
+            // Respawn
+            setIsRespawning(true);
+            setPlayerState({ x: 0, z: 0 }); // Respawn at origin
+            setWaterOverlay(0);
+            setSwimmingMessage(null);
+            setIsDrowning(false);
+            
+            setTimeout(() => {
+              setIsRespawning(false);
+            }, 1000);
+          }, 2000);
+        }
+      } else if (!playerInSea && !isDrowning) {
+        setWaterOverlay(0);
+      }
+      
+      // Check for deep sea - show warning message
+      if (playerInDeepSea && !swimmingMessageShown.current && !isDrowning) {
         setSwimmingMessage('¡Para ahí! ¿De verdad pretendes nadar con esos minibrazos?');
         swimmingMessageShown.current = true;
         setTimeout(() => {
@@ -4353,6 +4858,187 @@ export default function ToyVillageWorld() {
       // Update animals
       animals.forEach(animal => updateAnimalAI(animal, deltaMs));
       updateBirdFlock(deltaMs);
+      
+      // ============ BEACH BALL GAME UPDATE ============
+      if (beachBallRef.current && beachKidsRef.current.length === 3) {
+        const ball = ballStateRef.current;
+        const kids = beachKidsRef.current;
+        
+        // Check player collision with ball
+        const distToBall = Math.sqrt(
+          (playerState.x - ball.x) ** 2 + (playerState.z - ball.z) ** 2
+        );
+        
+        if (distToBall < 3 && !ball.isFlying && ball.fetchingKidIndex === -1) {
+          // Player hit the ball! Bounce it away
+          const dx = ball.x - playerState.x;
+          const dz = ball.z - playerState.z;
+          const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+          
+          ball.vx = (dx / dist) * 0.4;
+          ball.vz = (dz / dist) * 0.4;
+          ball.vy = 0.3;
+          ball.isFlying = true;
+          ball.currentKidIndex = -1;
+          
+          // Pick a kid to fetch it
+          ball.fetchingKidIndex = Math.floor(Math.random() * 3);
+          kids[ball.fetchingKidIndex].userData.state = 'fetching';
+        }
+        
+        // Update ball physics
+        if (ball.isFlying) {
+          ball.x += ball.vx * deltaMs * 0.1;
+          ball.z += ball.vz * deltaMs * 0.1;
+          ball.height += ball.vy * deltaMs * 0.1;
+          ball.vy -= 0.015 * deltaMs * 0.1; // Gravity
+          
+          // Bounce on ground
+          if (ball.height < 1.2) {
+            ball.height = 1.2;
+            ball.vy = Math.abs(ball.vy) * 0.5;
+            ball.vx *= 0.8;
+            ball.vz *= 0.8;
+            
+            if (Math.abs(ball.vy) < 0.05 && Math.abs(ball.vx) < 0.02) {
+              ball.isFlying = false;
+              ball.vx = 0;
+              ball.vz = 0;
+              ball.vy = 0;
+            }
+          }
+          
+          // Update ball visual position
+          beachBallRef.current.position.x = ball.x;
+          beachBallRef.current.position.z = ball.z;
+          beachBallRef.current.position.y = getTerrainHeight(ball.x, ball.z) + ball.height - 1.2;
+          beachBallRef.current.rotation.x += ball.vz * 0.5;
+          beachBallRef.current.rotation.z -= ball.vx * 0.5;
+        }
+        
+        // Update kids
+        kids.forEach((kid, i) => {
+          const data = kid.userData;
+          
+          if (data.state === 'fetching') {
+            // Move toward ball
+            const dx = ball.x - kid.position.x;
+            const dz = ball.z - kid.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            
+            if (dist > 2) {
+              const speed = 0.015 * deltaMs;
+              kid.position.x += (dx / dist) * speed;
+              kid.position.z += (dz / dist) * speed;
+              kid.position.y = getTerrainHeight(kid.position.x, kid.position.z);
+              kid.rotation.y = Math.atan2(dx, dz);
+              
+              // Animate arms while running
+              const armL = kid.children.find(c => c.name === 'armL');
+              const armR = kid.children.find(c => c.name === 'armR');
+              if (armL && armR) {
+                armL.rotation.x = Math.sin(time * 0.01) * 0.5;
+                armR.rotation.x = -Math.sin(time * 0.01) * 0.5;
+              }
+            } else {
+              // Reached ball, return home
+              data.state = 'returning';
+              ball.fetchingKidIndex = -1;
+            }
+          } else if (data.state === 'returning') {
+            // Move back to home position
+            const dx = data.homeX - kid.position.x;
+            const dz = data.homeZ - kid.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            
+            // Ball follows kid
+            ball.x = kid.position.x;
+            ball.z = kid.position.z;
+            beachBallRef.current.position.x = ball.x;
+            beachBallRef.current.position.z = ball.z;
+            beachBallRef.current.position.y = getTerrainHeight(ball.x, ball.z) + 3;
+            
+            if (dist > 1) {
+              const speed = 0.012 * deltaMs;
+              kid.position.x += (dx / dist) * speed;
+              kid.position.z += (dz / dist) * speed;
+              kid.position.y = getTerrainHeight(kid.position.x, kid.position.z);
+              kid.rotation.y = Math.atan2(dx, dz);
+            } else {
+              // Arrived home, start throwing to another kid
+              data.state = 'idle';
+              ball.currentKidIndex = i;
+              ball.waitTimer = 1500 + Math.random() * 1000;
+              beachBallRef.current.position.y = getTerrainHeight(ball.x, ball.z);
+            }
+          } else if (data.state === 'idle' && ball.currentKidIndex === i) {
+            // This kid has the ball, wait then throw
+            ball.waitTimer -= deltaMs;
+            
+            // Face center of play area
+            const centerX = 0;
+            const centerZ = 178;
+            kid.rotation.y = Math.atan2(centerX - kid.position.x, centerZ - kid.position.z);
+            
+            if (ball.waitTimer <= 0) {
+              // Throw to another kid
+              const otherKids = [0, 1, 2].filter(k => k !== i);
+              const targetIndex = otherKids[Math.floor(Math.random() * otherKids.length)];
+              const target = kids[targetIndex];
+              
+              // Calculate throw trajectory
+              const dx = target.position.x - ball.x;
+              const dz = target.position.z - ball.z;
+              const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+              
+              ball.vx = (dx / dist) * 0.25;
+              ball.vz = (dz / dist) * 0.25;
+              ball.vy = 0.2;
+              ball.height = 3;
+              ball.isFlying = true;
+              ball.currentKidIndex = -1;
+              ball.targetKidIndex = targetIndex;
+              
+              // Animate throw
+              const armR = kid.children.find(c => c.name === 'armR');
+              if (armR) armR.rotation.x = -1;
+            }
+          }
+          
+          // Check if ball reached target kid
+          if (ball.isFlying && ball.targetKidIndex === i && ball.fetchingKidIndex === -1) {
+            const dx = ball.x - kid.position.x;
+            const dz = ball.z - kid.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            
+            if (dist < 3 && ball.height < 4) {
+              // Caught!
+              ball.isFlying = false;
+              ball.vx = 0;
+              ball.vz = 0;
+              ball.vy = 0;
+              ball.height = 1.2;
+              ball.currentKidIndex = i;
+              ball.waitTimer = 1000 + Math.random() * 1500;
+              
+              // Position ball at kid's feet
+              ball.x = kid.position.x;
+              ball.z = kid.position.z;
+              beachBallRef.current.position.x = ball.x;
+              beachBallRef.current.position.z = ball.z;
+              beachBallRef.current.position.y = getTerrainHeight(ball.x, ball.z);
+            }
+          }
+          
+          // Reset arm positions when idle
+          if (data.state === 'idle') {
+            const armL = kid.children.find(c => c.name === 'armL');
+            const armR = kid.children.find(c => c.name === 'armR');
+            if (armL) armL.rotation.x = armL.rotation.x * 0.9;
+            if (armR) armR.rotation.x = armR.rotation.x * 0.9;
+          }
+        });
+      }
       
       // Update jacuzzi effects
       updateJacuzziBubbles(time);
@@ -5963,6 +6649,66 @@ Enviado desde el Pozo de los Deseos 🪙✨`
         </div>
       </div>
 
+      {/* WATER OVERLAY - Gradual water covering as you go deeper */}
+      {waterOverlay > 0 && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          background: `linear-gradient(180deg, 
+            rgba(32, 178, 170, ${waterOverlay * 0.3}) 0%, 
+            rgba(0, 128, 128, ${waterOverlay * 0.8}) 60%,
+            rgba(0, 80, 80, ${waterOverlay}) 100%)`,
+          pointerEvents: 'none',
+          zIndex: 250,
+          transition: 'all 0.5s ease',
+        }}>
+          {/* Bubbles effect */}
+          {isDrowning && (
+            <div style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              fontSize: 80,
+              animation: 'bubbleUp 1s ease-in-out infinite',
+            }}>
+              🫧
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* RESPAWN OVERLAY */}
+      {isRespawning && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          background: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 400,
+          animation: 'fadeOut 1s ease-out forwards',
+        }}>
+          <div style={{ fontSize: 64, marginBottom: 20 }}>🌊</div>
+          <div style={{ 
+            color: 'white', 
+            fontSize: 24, 
+            fontFamily: "'Inter Tight', sans-serif",
+            fontWeight: 600,
+          }}>
+            Respawning...
+          </div>
+        </div>
+      )}
+
       {/* SWIMMING MESSAGE - Shows when trying to swim too deep */}
       {swimmingMessage && (
         <div style={{
@@ -5971,18 +6717,22 @@ Enviado desde el Pozo de los Deseos 🪙✨`
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 300,
-          background: 'linear-gradient(135deg, #FF6B6B 0%, #EE5A5A 100%)',
+          background: isDrowning 
+            ? 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)' 
+            : 'linear-gradient(135deg, #FF6B6B 0%, #EE5A5A 100%)',
           color: 'white',
           padding: '20px 40px',
           borderRadius: 16,
           boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
           fontFamily: "'Inter Tight', system-ui, sans-serif",
-          fontSize: 18,
+          fontSize: isDrowning ? 28 : 18,
           fontWeight: 600,
           textAlign: 'center',
-          animation: 'bounceIn 0.4s ease-out',
+          animation: isDrowning ? 'shake 0.5s ease-in-out' : 'bounceIn 0.4s ease-out',
         }}>
-          <div style={{ fontSize: 32, marginBottom: 10 }}>🏊‍♂️🚫</div>
+          <div style={{ fontSize: isDrowning ? 48 : 32, marginBottom: 10 }}>
+            {isDrowning ? '💀🫧💀' : '🏊‍♂️🚫'}
+          </div>
           {swimmingMessage}
         </div>
       )}
@@ -6214,6 +6964,23 @@ Enviado desde el Pozo de los Deseos 🪙✨`
           0% { transform: translateX(-50%) scale(0.5); opacity: 0; }
           60% { transform: translateX(-50%) scale(1.1); opacity: 1; }
           100% { transform: translateX(-50%) scale(1); opacity: 1; }
+        }
+        
+        @keyframes shake {
+          0%, 100% { transform: translateX(-50%) rotate(0deg); }
+          10%, 30%, 50%, 70%, 90% { transform: translateX(-52%) rotate(-3deg); }
+          20%, 40%, 60%, 80% { transform: translateX(-48%) rotate(3deg); }
+        }
+        
+        @keyframes fadeOut {
+          0% { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        
+        @keyframes bubbleUp {
+          0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+          50% { transform: translate(-50%, -70%) scale(1.2); opacity: 0.7; }
+          100% { transform: translate(-50%, -90%) scale(0.8); opacity: 0; }
         }
         
         /* GUMMY BUTTON BASE */
