@@ -240,12 +240,12 @@ export default function ToyVillageWorld() {
     // EXCLUSION ZONES - areas where trees/rocks should NOT spawn
     const EXCLUSION_ZONES = [
       // === MAIN PLAZA (4 buildings + well) ===
-      { x: -70, z: 35, r: 55 },     // Main plaza area
-      { x: -100, z: 55, r: 20 },    // Tribal House (NW plaza)
-      { x: -40, z: 55, r: 20 },     // Bar Las Nieves (NE plaza)
-      { x: -100, z: 15, r: 18 },    // Cottage House (SW plaza)
-      { x: -40, z: 15, r: 18 },     // Library (SE plaza)
-      { x: -70, z: 8, r: 10 },      // Well (center bottom of plaza)
+      { x: -110, z: 30, r: 55 },     // Main plaza area (centered)
+      { x: -130, z: 13, r: 22 },     // Tribal House (SW plaza)
+      { x: -90, z: 0, r: 22 },       // Bar Las Nieves (SE plaza)
+      { x: -100, z: 60, r: 18 },     // Cottage House (N plaza)
+      { x: -130, z: 40, r: 18 },     // Library (W plaza)
+      { x: -110, z: 30, r: 10 },     // Well (center of plaza)
       // === OTHER BUILDINGS ===
       { x: 60, z: 45, r: 18 },      // Mediterranean House
       { x: -170, z: -170, r: 30 },  // Ice Cave House
@@ -320,8 +320,8 @@ export default function ToyVillageWorld() {
       
       // Bar area - characters walk at GROUND LEVEL around the bar
       // The bar structure is on a deck, but the floor where characters walk is ground level
-      const BAR_X = -40;  // New position: NE corner of main plaza
-      const BAR_Z = 55;
+      const BAR_X = -90;  // SE corner of main plaza
+      const BAR_Z = 0;
       const barDistSq = (x - BAR_X) ** 2 + (z - BAR_Z) ** 2;
       const barRadius = 22 * 1.2; // Scale 1.2
       
@@ -1650,8 +1650,8 @@ export default function ToyVillageWorld() {
       return group;
     }
     
-    // Tribal House - NW corner of main plaza
-    placeBuilding(createTribalHouse, -100, 55, 1, 0);
+    // Tribal House - SW of main plaza (facing plaza center at -100, 30)
+    placeBuilding(createTribalHouse, -130, 13, 1, 0.52);
     
     // ============ BAR "LAS NIEVES" ============
     function createBar(x, y, z, scale = 1) {
@@ -1967,12 +1967,13 @@ export default function ToyVillageWorld() {
       return group;
     }
     
-    // Place Bar "Las Nieves" in the main plaza (NE corner)
-    const BAR_X = -40;
-    const BAR_Z = 55;
+    // Place Bar "Las Nieves" - SE corner of plaza
+    const BAR_X = -90;
+    const BAR_Z = 0;
     const BAR_SCALE = 1.2;
     const barBaseY = getTerrainHeight(BAR_X, BAR_Z);
-    createBar(BAR_X, barBaseY, BAR_Z, BAR_SCALE);
+    const barGroup = createBar(BAR_X, barBaseY, BAR_Z, BAR_SCALE);
+    barGroup.rotation.y = -0.3; // Face toward plaza and river (north-northwest)
     
     // Store bar position in ref for congregation (horn mechanic still works!)
     congregationRef.current.templeX = BAR_X;
@@ -1982,13 +1983,15 @@ export default function ToyVillageWorld() {
     
     // ============ BUILDING APP LOCATIONS ============
     // These define clickable/enterable buildings
+    // Plaza center is approximately at (-110, 30)
     const buildingLocations = [
-      // Main plaza buildings
-      { id: 'tribal', x: -100, z: 55, radius: 18, app: BUILDING_APPS.tribal },
-      { id: 'cottage', x: -100, z: 15, radius: 16, app: BUILDING_APPS.cottage },
-      { id: 'temple', x: BAR_X, z: BAR_Z, radius: 10, app: BUILDING_APPS.temple },
-      // Pozo de los Deseos - center bottom of plaza
-      { id: 'well1', x: -70, z: 8, radius: 8, app: BUILDING_APPS.well },
+      // Main plaza buildings - new positions
+      { id: 'tribal', x: -130, z: 13, radius: 18, app: BUILDING_APPS.tribal },    // SW of plaza
+      { id: 'cottage', x: -100, z: 60, radius: 16, app: BUILDING_APPS.cottage },  // N of plaza (Configuración)
+      { id: 'library', x: -130, z: 40, radius: 16, app: null },                    // W of plaza (no app yet)
+      { id: 'temple', x: BAR_X, z: BAR_Z, radius: 12, app: BUILDING_APPS.temple }, // SE of plaza (Bar at -90, 0)
+      // Pozo de los Deseos - center of plaza
+      { id: 'well1', x: -110, z: 30, radius: 8, app: BUILDING_APPS.well },
       // Other buildings
       { id: 'mediterranean', x: 60, z: 45, radius: 16, app: BUILDING_APPS.mediterranean },
       { id: 'icecave', x: -170, z: -170, radius: 20, app: BUILDING_APPS.icecave },
@@ -2326,7 +2329,7 @@ export default function ToyVillageWorld() {
     placeBuilding(createMediterraneanHouse, 60, 45, 0.9, -0.3);
     
     // Cottage House - SW corner of main plaza
-    placeBuilding(createCottageHouse, -100, 15, 0.85, 0.4);
+    placeBuilding(createCottageHouse, -100, 60, 0.85, -Math.PI/2); // N of plaza, facing south toward center
     
     // Ice Cave House - NORTHWEST corner (frozen fjords) - door facing south
     placeBuilding(createIceCaveHouse, -170, -170, 1.1, 0);
@@ -2493,7 +2496,7 @@ export default function ToyVillageWorld() {
     }
 
     // Pozo de los Deseos - center bottom of main plaza
-    createWell(-70, getTerrainHeight(-70, 8), 8, 1);
+    createWell(-110, getTerrainHeight(-110, 30), 30, 1); // Center of plaza
     
     // Pozo Mayor - north area (smaller scale)
     createWell(10, getTerrainHeight(10, -55), -55, 0.9);
@@ -2502,25 +2505,12 @@ export default function ToyVillageWorld() {
     function createPlazaFloor() {
       const plazaGroup = new THREE.Group();
       
-      // Plaza dimensions
-      const plazaCenterX = -70;
-      const plazaCenterZ = 35;
-      const plazaWidth = 80;
-      const plazaDepth = 60;
+      // Plaza center at well position
+      const plazaCenterX = -110;
+      const plazaCenterZ = 30;
       
-      // Main cobblestone floor
-      const floorGeom = new THREE.PlaneGeometry(plazaWidth, plazaDepth, 20, 15);
-      const positions = floorGeom.attributes.position.array;
-      
-      // Slight height variation for natural look
-      for (let i = 0; i < positions.length; i += 3) {
-        const localX = positions[i];
-        const localZ = positions[i + 1];
-        const worldX = plazaCenterX + localX;
-        const worldZ = plazaCenterZ - localZ;
-        positions[i + 2] = getTerrainHeight(worldX, worldZ) + 0.1 + Math.random() * 0.05;
-      }
-      floorGeom.computeVertexNormals();
+      // Buildings positions for reference:
+      // Bar: -90, 0 | Tribal: -130, 13 | Library: -130, 40 | Cottage: -100, 60
       
       const cobbleMat = new THREE.MeshStandardMaterial({
         color: 0x8B7355,
@@ -2528,33 +2518,83 @@ export default function ToyVillageWorld() {
         metalness: 0.05,
       });
       
-      const floor = new THREE.Mesh(floorGeom, cobbleMat);
-      floor.rotation.x = -Math.PI / 2;
-      floor.position.set(plazaCenterX, 0, plazaCenterZ);
-      plazaGroup.add(floor);
+      // Create irregular circular plaza using overlapping circles
+      // Each circle extends toward a building door
+      const plazaCircles = [
+        { x: plazaCenterX, z: plazaCenterZ, r: 22 },      // Main central circle
+        { x: -105, z: 10, r: 18 },                         // Extension toward Bar (-90, 0)
+        { x: -125, z: 18, r: 14 },                         // Extension toward Tribal (-130, 13)
+        { x: -125, z: 38, r: 12 },                         // Extension toward Library (-130, 40)
+        { x: -105, z: 52, r: 14 },                         // Extension toward Cottage (-100, 60)
+        { x: -115, z: 42, r: 10 },                         // Bridge between Library and Cottage
+        { x: -118, z: 22, r: 12 },                         // Bridge between Tribal and center
+      ];
       
-      // Decorative cobblestone pattern (darker stones)
+      // Create floor discs for each circle
+      plazaCircles.forEach((circle, idx) => {
+        const segments = 24 + Math.floor(circle.r);
+        const circleGeom = new THREE.CircleGeometry(circle.r, segments);
+        const positions = circleGeom.attributes.position.array;
+        
+        // Add height variation
+        for (let i = 0; i < positions.length; i += 3) {
+          const localX = positions[i];
+          const localZ = positions[i + 1];
+          const worldX = circle.x + localX;
+          const worldZ = circle.z + localZ;
+          positions[i + 2] = getTerrainHeight(worldX, worldZ) + 0.08 + Math.random() * 0.03;
+        }
+        circleGeom.computeVertexNormals();
+        
+        const disc = new THREE.Mesh(circleGeom, cobbleMat);
+        disc.rotation.x = -Math.PI / 2;
+        disc.position.set(circle.x, 0.05, circle.z);
+        plazaGroup.add(disc);
+      });
+      
+      // Decorative cobblestones scattered across the irregular shape
       const stoneMat = createGlossyMaterial(0x6B5344, 0.1);
-      for (let i = 0; i < 120; i++) {
-        const stoneX = plazaCenterX + (Math.random() - 0.5) * (plazaWidth - 4);
-        const stoneZ = plazaCenterZ + (Math.random() - 0.5) * (plazaDepth - 4);
-        const stoneY = getTerrainHeight(stoneX, stoneZ) + 0.15;
+      const stoneMat2 = createGlossyMaterial(0x9A8470, 0.15);
+      
+      // Helper to check if point is inside any plaza circle
+      function isInPlaza(x, z) {
+        for (const circle of plazaCircles) {
+          const dist = Math.sqrt((x - circle.x) ** 2 + (z - circle.z) ** 2);
+          if (dist < circle.r - 1) return true;
+        }
+        return false;
+      }
+      
+      // Scatter stones within plaza area
+      for (let i = 0; i < 200; i++) {
+        const stoneX = plazaCenterX + (Math.random() - 0.5) * 60;
+        const stoneZ = plazaCenterZ + (Math.random() - 0.5) * 70;
+        
+        if (!isInPlaza(stoneX, stoneZ)) continue;
+        
+        const stoneY = getTerrainHeight(stoneX, stoneZ) + 0.12;
+        const mat = Math.random() > 0.6 ? stoneMat2 : stoneMat;
         
         const stone = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.4 + Math.random() * 0.3, 0.5 + Math.random() * 0.3, 0.1, 6),
-          stoneMat
+          new THREE.CylinderGeometry(
+            0.3 + Math.random() * 0.4, 
+            0.4 + Math.random() * 0.4, 
+            0.08, 
+            5 + Math.floor(Math.random() * 3)
+          ),
+          mat
         );
         stone.position.set(stoneX, stoneY, stoneZ);
         stone.rotation.y = Math.random() * Math.PI;
         plazaGroup.add(stone);
       }
       
-      // Benches around the plaza
+      // Benches positioned within plaza
       const benchMat = createGlossyMaterial(0x5D4037, 0.2);
       const benchPositions = [
-        { x: plazaCenterX - 35, z: plazaCenterZ, rot: Math.PI / 2 },
-        { x: plazaCenterX + 35, z: plazaCenterZ, rot: -Math.PI / 2 },
-        { x: plazaCenterX, z: plazaCenterZ - 25, rot: 0 },
+        { x: -120, z: 30, rot: Math.PI / 2 },   // West side near Library
+        { x: -100, z: 25, rot: -Math.PI / 4 },  // East side
+        { x: -110, z: 45, rot: 0 },              // North side
       ];
       
       benchPositions.forEach(pos => {
@@ -2584,15 +2624,15 @@ export default function ToyVillageWorld() {
         plazaGroup.add(benchGroup);
       });
       
-      // Decorative lantern posts at corners
+      // Decorative lantern posts around the irregular plaza
       const lanternMat = createGlossyMaterial(0x2C2C2C, 0.3);
       const glassMat = createGlossyMaterial(0xFFE4B5, 0.1);
       
       const lanternPositions = [
-        { x: plazaCenterX - 30, z: plazaCenterZ + 20 },
-        { x: plazaCenterX + 30, z: plazaCenterZ + 20 },
-        { x: plazaCenterX - 30, z: plazaCenterZ - 20 },
-        { x: plazaCenterX + 30, z: plazaCenterZ - 20 },
+        { x: -100, z: 40 },   // Between Library and Cottage
+        { x: -120, z: 48 },   // Near Cottage
+        { x: -95, z: 15 },    // Near Bar
+        { x: -118, z: 12 },   // Near Tribal
       ];
       
       lanternPositions.forEach(pos => {
@@ -2782,10 +2822,11 @@ export default function ToyVillageWorld() {
       return group;
     }
     
-    // Place Library at SE corner of plaza
-    const libraryX = -40;
-    const libraryZ = 15;
-    createLibrary(libraryX, getTerrainHeight(libraryX, libraryZ), libraryZ, 0.85);
+    // Place Library at W of plaza
+    const libraryX = -130;
+    const libraryZ = 40;
+    const libraryBuilding = createLibrary(libraryX, getTerrainHeight(libraryX, libraryZ), libraryZ, 0.85);
+    libraryBuilding.rotation.y = 2.03; // Face toward plaza center (-110, 30) from (-130, 40)
 
     // ============ TREES ============
     function createTree(x, y, z, type = 'normal', scale = 1) {
@@ -3361,14 +3402,14 @@ export default function ToyVillageWorld() {
       // Near market area
       { x: 0, z: 42, config: { hairStyle: 'spiky', hasBeard: true, shirtColor: 0x3498DB, pantsColor: 0xE74C3C } },
       
-      // Near tribal house / orchard (west)
-      { x: -70, z: 52, config: { hasBeard: true, shirtColor: 0xC0392B, pantsColor: 0x1a1a1a } },
+      // Near new plaza center (-110, 30)
+      { x: -105, z: 25, config: { hasBeard: true, shirtColor: 0xC0392B, pantsColor: 0x1a1a1a } },
       
       // Near plaza well
-      { x: 10, z: 28, config: { shirtColor: 0x27AE60, pantsColor: 0x27AE60, scale: 0.85 } },
+      { x: -115, z: 35, config: { shirtColor: 0x27AE60, pantsColor: 0x27AE60, scale: 0.85 } },
       
-      // Near cottage (west side, avoiding well on east)
-      { x: -60, z: 15, config: { skinColor: 0xF5CBA7, hairColor: 0xF4D03F, hasBeard: true, beardColor: 0xF4D03F, shirtColor: 0x8E44AD } },
+      // Near tribal house (SW at -130, 13)
+      { x: -140, z: 8, config: { skinColor: 0xF5CBA7, hairColor: 0xF4D03F, hasBeard: true, beardColor: 0xF4D03F, shirtColor: 0x8E44AD } },
       
       // Near ice cave (high zone - north)
       { x: 20, z: -45, config: { hairStyle: 'spiky', hasBeard: false, shirtColor: 0x795548, pantsColor: 0x3E2723 } },
@@ -3941,8 +3982,8 @@ export default function ToyVillageWorld() {
             // Check if valid (not in water for ground animals)
             if (ai.isFlying || !isInRiver(newX, newZ)) {
               // Also check bar/plaza exclusion zone (animals NEVER enter bar area)
-              const BAR_X = -40, BAR_Z = 55, BAR_RADIUS = 18;
-              const PLAZA_X = -70, PLAZA_Z = 35, PLAZA_RADIUS = 45;
+              const BAR_X = -90, BAR_Z = 0, BAR_RADIUS = 20;
+              const PLAZA_X = -110, PLAZA_Z = 30, PLAZA_RADIUS = 55;
               const distToBar = Math.sqrt((newX - BAR_X) ** 2 + (newZ - BAR_Z) ** 2);
               const distToPlaza = Math.sqrt((newX - PLAZA_X) ** 2 + (newZ - PLAZA_Z) ** 2);
               
@@ -3991,8 +4032,8 @@ export default function ToyVillageWorld() {
           
           // Bar/plaza exclusion zone (animals NEVER enter bar/plaza area, even when congregated)
           if (!ai.isFlying) {
-            const BAR_X = -40, BAR_Z = 55, BAR_RADIUS = 18;
-            const PLAZA_X = -70, PLAZA_Z = 35, PLAZA_RADIUS = 45;
+            const BAR_X = -90, BAR_Z = 0, BAR_RADIUS = 20;
+            const PLAZA_X = -110, PLAZA_Z = 30, PLAZA_RADIUS = 55;
             const distToBar = Math.sqrt((nextX - BAR_X) ** 2 + (nextZ - BAR_Z) ** 2);
             const distToPlaza = Math.sqrt((nextX - PLAZA_X) ** 2 + (nextZ - PLAZA_Z) ** 2);
             if (distToBar < BAR_RADIUS) {
@@ -4172,19 +4213,20 @@ export default function ToyVillageWorld() {
       // River is now passable! But you'll drift...
       // No river collision - player can enter the water
 
-      // Building collision - 4 buildings + 2 wells + orchard + canoe
+      // Building collision - plaza buildings + wells + other structures
       const buildings = [
-        { x: -90, z: 55, r: 14 },   // Tribal House
-        { x: -60, z: 55, r: 12 },   // Orchard area
-        { x: -85, z: 75, r: 6 },    // Canoe (on river near tribal house)
-        { x: 60, z: 45, r: 12 },    // Mediterranean House
-        { x: -50, z: 10, r: 12 },   // Cottage House
-        { x: -170, z: -170, r: 16 },   // Ice Cave House (northwest)
-        { x: -32, z: 12, r: 5 },    // Well next to cottage
-        { x: 10, z: -55, r: 6 },    // Well alto
-        { x: 25, z: 42, r: 4 },     // Market stall 1
-        { x: 25, z: 32, r: 4 },     // Market stall 2
-        { x: 25, z: 22, r: 4 },     // Market stall 3
+        { x: -130, z: 13, r: 16 },   // Tribal House (SW plaza)
+        { x: -90, z: 0, r: 14 },     // Bar Las Nieves (SE plaza)
+        { x: -100, z: 60, r: 12 },   // Cottage House (N plaza)
+        { x: -130, z: 40, r: 12 },   // Library (W plaza)
+        { x: -110, z: 30, r: 5 },    // Well (center plaza)
+        { x: 60, z: 45, r: 12 },     // Mediterranean House
+        { x: -170, z: -170, r: 16 }, // Ice Cave House (northwest)
+        { x: 10, z: -55, r: 6 },     // Well alto
+        { x: 25, z: 42, r: 4 },      // Market stall 1
+        { x: 25, z: 32, r: 4 },      // Market stall 2
+        { x: 25, z: 22, r: 4 },      // Market stall 3
+        { x: -85, z: 75, r: 6 },     // Canoe (on river)
       ];
 
       for (const b of buildings) {
